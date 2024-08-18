@@ -4,6 +4,78 @@
 
 XPU Optimizer is an advanced task scheduling and resource management system designed for heterogeneous computing environments. It leverages the power of XPU (Accelerated Processing Units) technology to optimize task execution across various processing units such as CPUs, GPUs, NPUs, and FPGAs.
 
+## XPU Architecture
+
+The XPU architecture is designed to efficiently manage and utilize different types of processing units in a heterogeneous computing environment. Here's a high-level overview of the XPU architecture:
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+  <rect x="0" y="0" width="800" height="600" fill="#f0f0f0"/>
+
+  <!-- Application Layer -->
+  <g>
+    <rect x="50" y="50" width="700" height="80" fill="#4CAF50" stroke="black" stroke-width="2" />
+    <text x="400" y="95" text-anchor="middle" fill="white" font-weight="bold" font-size="18">Application Layer</text>
+    <text x="200" y="95" text-anchor="middle" fill="white" font-size="14">Machine Learning</text>
+    <text x="400" y="95" text-anchor="middle" fill="white" font-size="14">Data Analytics</text>
+    <text x="600" y="95" text-anchor="middle" fill="white" font-size="14">Scientific Simulation</text>
+  </g>
+
+  <!-- XPU Runtime -->
+  <g>
+    <rect x="50" y="150" width="700" height="100" fill="#2196F3" stroke="black" stroke-width="2" />
+    <text x="400" y="185" text-anchor="middle" fill="white" font-weight="bold" font-size="18">XPU Runtime</text>
+    <text x="200" y="215" text-anchor="middle" fill="white" font-size="14">Task Scheduler</text>
+    <text x="400" y="215" text-anchor="middle" fill="white" font-size="14">Memory Manager</text>
+    <text x="600" y="215" text-anchor="middle" fill="white" font-size="14">Load Balancer</text>
+  </g>
+
+  <!-- XPU Libraries -->
+  <g>
+    <rect x="50" y="270" width="700" height="100" fill="#FFC107" stroke="black" stroke-width="2" />
+    <text x="400" y="305" text-anchor="middle" fill="white" font-weight="bold" font-size="18">XPU Libraries</text>
+    <text x="200" y="335" text-anchor="middle" fill="white" font-size="14">BLAS</text>
+    <text x="400" y="335" text-anchor="middle" fill="white" font-size="14">FFT</text>
+    <text x="600" y="335" text-anchor="middle" fill="white" font-size="14">Deep Learning</text>
+  </g>
+
+  <!-- XPU Drivers -->
+  <g>
+    <rect x="50" y="390" width="700" height="80" fill="#9C27B0" stroke="black" stroke-width="2" />
+    <text x="400" y="435" text-anchor="middle" fill="white" font-weight="bold" font-size="18">XPU Drivers</text>
+    <text x="200" y="435" text-anchor="middle" fill="white" font-size="14">CPU Driver</text>
+    <text x="400" y="435" text-anchor="middle" fill="white" font-size="14">GPU Driver</text>
+    <text x="600" y="435" text-anchor="middle" fill="white" font-size="14">TPU Driver</text>
+  </g>
+
+  <!-- Hardware Layer -->
+  <g>
+    <rect x="50" y="490" width="700" height="60" fill="#FF5722" stroke="black" stroke-width="2" />
+    <text x="400" y="525" text-anchor="middle" fill="white" font-weight="bold" font-size="18">XPU Hardware</text>
+  </g>
+
+  <!-- Arrows -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+  </defs>
+
+  <line x1="400" y1="130" x2="400" y2="150" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="250" x2="400" y2="270" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="370" x2="400" y2="390" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="470" x2="400" y2="490" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+</svg>
+
+The XPU architecture consists of several layers:
+
+1. Application Layer: Hosts various applications like Machine Learning, Data Analytics, and Scientific Simulations.
+2. XPU Runtime: Manages task scheduling, memory, and load balancing across different processing units.
+3. XPU Libraries: Provides optimized libraries for common operations like BLAS, FFT, and Deep Learning.
+4. XPU Drivers: Interfaces with different types of processing units (CPU, GPU, TPU).
+5. XPU Hardware: The physical processing units that execute the tasks.
+
+This layered architecture allows for efficient utilization of heterogeneous computing resources, enabling optimal performance for a wide range of applications.
+
 ## Features
 
 - Multi-platform support (CPU, GPU, NPU, FPGA)
