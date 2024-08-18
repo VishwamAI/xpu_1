@@ -1,16 +1,24 @@
-use std::collections::HashMap;
 use crate::{ProcessingUnit, Task, XpuOptimizerError};
+use std::collections::HashMap;
 
 pub trait ClusterManager: Send + Sync {
     fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError>;
     fn remove_node(&mut self, node_id: &str) -> Result<(), XpuOptimizerError>;
     fn get_node(&self, node_id: &str) -> Option<&ClusterNode>;
     fn list_nodes(&self) -> Vec<&ClusterNode>;
-    fn update_node_status(&mut self, node_id: &str, status: NodeStatus) -> Result<(), XpuOptimizerError>;
+    fn update_node_status(
+        &mut self,
+        node_id: &str,
+        status: NodeStatus,
+    ) -> Result<(), XpuOptimizerError>;
 }
 
 pub trait LoadBalancer: Send + Sync {
-    fn distribute_tasks(&self, tasks: &[Task], nodes: &[ClusterNode]) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError>;
+    fn distribute_tasks(
+        &self,
+        tasks: &[Task],
+        nodes: &[ClusterNode],
+    ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError>;
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +53,10 @@ impl SimpleClusterManager {
 impl ClusterManager for SimpleClusterManager {
     fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError> {
         if self.nodes.contains_key(&node.id) {
-            return Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} already exists", node.id)));
+            return Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} already exists",
+                node.id
+            )));
         }
         self.nodes.insert(node.id.clone(), node);
         Ok(())
@@ -53,7 +64,10 @@ impl ClusterManager for SimpleClusterManager {
 
     fn remove_node(&mut self, node_id: &str) -> Result<(), XpuOptimizerError> {
         if self.nodes.remove(node_id).is_none() {
-            return Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} not found", node_id)));
+            return Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )));
         }
         Ok(())
     }
@@ -66,12 +80,19 @@ impl ClusterManager for SimpleClusterManager {
         self.nodes.values().collect()
     }
 
-    fn update_node_status(&mut self, node_id: &str, status: NodeStatus) -> Result<(), XpuOptimizerError> {
+    fn update_node_status(
+        &mut self,
+        node_id: &str,
+        status: NodeStatus,
+    ) -> Result<(), XpuOptimizerError> {
         if let Some(node) = self.nodes.get_mut(node_id) {
             node.status = status;
             Ok(())
         } else {
-            Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} not found", node_id)))
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )))
         }
     }
 }
@@ -80,17 +101,29 @@ impl ClusterManager for SimpleClusterManager {
 pub struct RoundRobinLoadBalancer;
 
 impl LoadBalancer for RoundRobinLoadBalancer {
-    fn distribute_tasks(&self, tasks: &[Task], nodes: &[ClusterNode]) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
+    fn distribute_tasks(
+        &self,
+        tasks: &[Task],
+        nodes: &[ClusterNode],
+    ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
         let mut distribution = HashMap::new();
-        let active_nodes: Vec<_> = nodes.iter().filter(|n| n.status == NodeStatus::Active).collect();
+        let active_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.status == NodeStatus::Active)
+            .collect();
 
         if active_nodes.is_empty() {
-            return Err(XpuOptimizerError::ClusterInitializationError("No active nodes available".to_string()));
+            return Err(XpuOptimizerError::ClusterInitializationError(
+                "No active nodes available".to_string(),
+            ));
         }
 
         for (i, task) in tasks.iter().enumerate() {
             let node = &active_nodes[i % active_nodes.len()];
-            distribution.entry(node.id.clone()).or_insert_with(Vec::new).push(task.clone());
+            distribution
+                .entry(node.id.clone())
+                .or_insert_with(Vec::new)
+                .push(task.clone());
         }
 
         Ok(distribution)

@@ -1,5 +1,5 @@
-use xpu_manager_rust::{TaskScheduler, Task, MemoryManager, PowerManager, PowerState};
 use std::time::Duration;
+use xpu_manager_rust::{MemoryManager, PowerManager, PowerState, Task, TaskScheduler};
 
 #[cfg(test)]
 mod tests {
@@ -15,7 +15,10 @@ mod tests {
 
         assert!(scheduler.tasks.is_empty());
         assert_eq!(memory_manager.get_available_memory(), total_memory);
-        assert!(matches!(power_manager.get_power_state(), PowerState::Normal));
+        assert!(matches!(
+            power_manager.get_power_state(),
+            PowerState::Normal
+        ));
     }
 
     #[test]
@@ -76,7 +79,12 @@ mod tests {
             task_scheduler.add_task(task);
         }
 
-        assert!(memory_manager.allocate_for_tasks(&task_scheduler.tasks).is_ok());
-        assert_eq!(memory_manager.get_available_memory(), total_memory - 5 * 100);
+        assert!(memory_manager
+            .allocate_for_tasks(&task_scheduler.tasks)
+            .is_ok());
+        assert_eq!(
+            memory_manager.get_available_memory(),
+            total_memory - 5 * 100
+        );
     }
 }

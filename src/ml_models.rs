@@ -1,6 +1,6 @@
-use std::time::Duration;
-use crate::task_data::{TaskExecutionData, HistoricalTaskData, TaskPrediction};
+use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
 use crate::ProcessingUnitType;
+use std::time::Duration;
 
 pub trait MLModel: Send + Sync {
     fn train(&mut self, historical_data: &[TaskExecutionData]);
@@ -58,7 +58,11 @@ impl MLModel for SimpleRegressionModel {
         for _ in 0..iterations {
             let mut gradient = vec![0.0; self.coefficients.len()];
             for i in 0..m {
-                let h = x[i].iter().zip(&self.coefficients).map(|(xi, ci)| xi * ci).sum::<f64>();
+                let h = x[i]
+                    .iter()
+                    .zip(&self.coefficients)
+                    .map(|(xi, ci)| xi * ci)
+                    .sum::<f64>();
                 let error = h - y[i];
                 for j in 0..self.coefficients.len() {
                     gradient[j] += error * x[i][j] / m as f64;
@@ -78,7 +82,10 @@ impl MLModel for SimpleRegressionModel {
             task_data.priority as f64,
         ];
 
-        let prediction: f64 = self.coefficients.iter().zip(features.iter())
+        let prediction: f64 = self
+            .coefficients
+            .iter()
+            .zip(features.iter())
             .map(|(coef, feat)| coef * feat)
             .sum();
 

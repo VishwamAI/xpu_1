@@ -23,7 +23,10 @@ impl TaskScheduler {
         TaskScheduler {
             tasks: VecDeque::new(),
             processing_units: (0..num_processing_units)
-                .map(|id| ProcessingUnit { id, current_load: Duration::new(0, 0) })
+                .map(|id| ProcessingUnit {
+                    id,
+                    current_load: Duration::new(0, 0),
+                })
                 .collect(),
         }
     }
@@ -57,6 +60,8 @@ impl TaskScheduler {
     }
 
     fn find_available_unit(&mut self) -> Option<&mut ProcessingUnit> {
-        self.processing_units.iter_mut().min_by_key(|unit| unit.current_load)
+        self.processing_units
+            .iter_mut()
+            .min_by_key(|unit| unit.current_load)
     }
 }

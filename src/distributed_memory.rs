@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::XpuOptimizerError;
+use std::collections::HashMap;
 
 pub trait DistributedMemoryManager: Send + Sync {
     fn allocate(&mut self, task_id: usize, size: usize) -> Result<(), XpuOptimizerError>;
@@ -26,7 +26,9 @@ impl SimpleDistributedMemoryManager {
 impl DistributedMemoryManager for SimpleDistributedMemoryManager {
     fn allocate(&mut self, task_id: usize, size: usize) -> Result<(), XpuOptimizerError> {
         if self.used_memory + size > self.total_memory {
-            return Err(XpuOptimizerError::MemoryError("Not enough memory available".to_string()));
+            return Err(XpuOptimizerError::MemoryError(
+                "Not enough memory available".to_string(),
+            ));
         }
         self.memory_pool.insert(task_id, size);
         self.used_memory += size;
@@ -38,7 +40,9 @@ impl DistributedMemoryManager for SimpleDistributedMemoryManager {
             self.used_memory -= size;
             Ok(())
         } else {
-            Err(XpuOptimizerError::MemoryError("Task not found in memory pool".to_string()))
+            Err(XpuOptimizerError::MemoryError(
+                "Task not found in memory pool".to_string(),
+            ))
         }
     }
 

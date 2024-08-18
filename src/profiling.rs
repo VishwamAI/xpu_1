@@ -1,5 +1,5 @@
-use std::time::{Instant, Duration};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 pub struct Profiler {
     task_timings: HashMap<usize, Duration>,

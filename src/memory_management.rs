@@ -39,8 +39,14 @@ impl MemoryManager {
         self.total_memory - self.allocated_memory
     }
 
-    pub fn allocate_for_tasks(&mut self, tasks: &VecDeque<crate::task_scheduling::Task>) -> Result<(), String> {
-        let total_required = tasks.iter().map(|task| task.memory_requirement).sum::<usize>();
+    pub fn allocate_for_tasks(
+        &mut self,
+        tasks: &VecDeque<crate::task_scheduling::Task>,
+    ) -> Result<(), String> {
+        let total_required = tasks
+            .iter()
+            .map(|task| task.memory_requirement)
+            .sum::<usize>();
         if self.allocated_memory + total_required <= self.total_memory {
             for task in tasks {
                 self.allocate(task.memory_requirement)?;
@@ -51,7 +57,10 @@ impl MemoryManager {
         }
     }
 
-    pub fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), String> {
+    pub fn deallocate_completed_tasks(
+        &mut self,
+        completed_tasks: &[crate::task_scheduling::Task],
+    ) -> Result<(), String> {
         for task in completed_tasks {
             self.deallocate(task.memory_requirement)?;
         }

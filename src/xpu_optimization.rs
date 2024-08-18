@@ -1,47 +1,59 @@
-use std::collections::{VecDeque, HashMap};
-use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::algo::toposort;
-use log::{info, warn, error};
-use thiserror::Error;
-use rand::Rng;
-use serde::{Serialize, Deserialize};
+use argon2::{
+    self, password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+};
 use chrono::Utc;
-use argon2::{self, Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString};
-use jsonwebtoken::{encode, decode, Header, Algorithm, Validation, EncodingKey, DecodingKey};
 use futures::future::Future;
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use log::{error, info, warn};
+use petgraph::algo::toposort;
+use petgraph::graph::{DiGraph, NodeIndex};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio;
 
 // External library integrations
 #[cfg(feature = "cuda_support")]
 use cuda::prelude::*;
-#[cfg(feature = "pytorch_support")]
-use tch::Device;
-#[cfg(feature = "kubernetes_support")]
-use kube::Client as KubeClient;
-#[cfg(feature = "google_cloud_support")]
-use google_cloud_storage::client::Client as GcsClient;
 #[cfg(feature = "google_cloud_support")]
 use google_cloud_pubsub::client::Client as PubsubClient;
+#[cfg(feature = "google_cloud_support")]
+use google_cloud_storage::client::Client as GcsClient;
+#[cfg(feature = "kubernetes_support")]
+use kube::Client as KubeClient;
+#[cfg(feature = "pytorch_support")]
+use tch::Device;
 
 // Custom modules
-use crate::distributed_memory::DistributedMemoryManager;
-use crate::power_management::{EnergyMonitor, PowerPolicy, PowerState, EnergyProfile, PowerManager};
-use crate::scaling::{ScalingPolicy, ScalingAction};
-use crate::resource_monitoring::ResourceMonitor;
-use crate::ml_models::MLModel;
-use crate::task_data::{TaskExecutionData, HistoricalTaskData, TaskPrediction};
-use crate::profiling::Profiler;
-use crate::cluster_management::{ClusterManager, LoadBalancer, ClusterNode, NodeStatus};
-use crate::task_scheduling::{DistributedScheduler, SchedulingStrategy, TaskScheduler, RoundRobinScheduler, LoadBalancingScheduler, AIOptimizedScheduler};
-use crate::memory_management::{MemoryStrategy, MemoryManager, SimpleMemoryManager, DynamicMemoryManager};
 use crate::cloud_offloading::CloudOffloader;
+use crate::cluster_management::{ClusterManager, ClusterNode, LoadBalancer, NodeStatus};
+use crate::distributed_memory::DistributedMemoryManager;
+use crate::memory_management::{
+    DynamicMemoryManager, MemoryManager, MemoryStrategy, SimpleMemoryManager,
+};
+use crate::ml_models::MLModel;
+use crate::power_management::{
+    EnergyMonitor, EnergyProfile, PowerManager, PowerPolicy, PowerState,
+};
+use crate::profiling::Profiler;
+use crate::resource_monitoring::ResourceMonitor;
+use crate::scaling::{ScalingAction, ScalingPolicy};
+use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
+use crate::task_scheduling::{
+    AIOptimizedScheduler, DistributedScheduler, LoadBalancingScheduler, RoundRobinScheduler,
+    SchedulingStrategy, TaskScheduler,
+};
 
 pub trait MachineLearningOptimizer: Send + Sync {
-    fn optimize(&self, historical_data: &[TaskExecutionData]) -> Result<SchedulingStrategy, XpuOptimizerError>;
+    fn optimize(
+        &self,
+        historical_data: &[TaskExecutionData],
+    ) -> Result<SchedulingStrategy, XpuOptimizerError>;
 }
 
 // Define ProcessingUnit, Task, and ProcessingUnitType here
@@ -91,9 +103,6 @@ pub struct Task {
     pub estimated_resource_usage: usize,
 }
 
-
-
-
 // CloudTaskOffloader trait removed as it's redundant with CloudOffloader
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,15 +147,14 @@ impl ProcessingUnit {
     }
 
     pub fn current_power_consumption(&self) -> f32 {
-        self.energy_profile.power_consumption(&self.power_state, self.current_load)
+        self.energy_profile
+            .power_consumption(&self.power_state, self.current_load)
     }
 
     pub fn set_power_state(&mut self, state: PowerState) {
         self.power_state = state;
     }
 }
-
-
 
 impl Task {
     pub fn new(
@@ -202,26 +210,36 @@ impl LatencyMonitor {
     }
 
     pub fn record_start(&self, task_id: usize, time: Instant) -> Result<(), XpuOptimizerError> {
-        self.start_times.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e)))?
+        self.start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
             .insert(task_id, time);
         Ok(())
     }
 
     pub fn record_end(&self, task_id: usize, time: Instant) -> Result<(), XpuOptimizerError> {
-        self.end_times.lock()
+        self.end_times
+            .lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
             .insert(task_id, time);
         Ok(())
     }
 
     pub fn get_latency(&self, task_id: usize) -> Result<Option<Duration>, XpuOptimizerError> {
-        let start = self.start_times.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e)))?
+        let start = self
+            .start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
             .get(&task_id)
             .cloned();
 
-        let end = self.end_times.lock()
+        let end = self
+            .end_times
+            .lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
             .get(&task_id)
             .cloned();
@@ -233,10 +251,14 @@ impl LatencyMonitor {
     }
 
     pub fn remove_task(&self, task_id: usize) -> Result<(), XpuOptimizerError> {
-        self.start_times.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e)))?
+        self.start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
             .remove(&task_id);
-        self.end_times.lock()
+        self.end_times
+            .lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
             .remove(&task_id);
         Ok(())
@@ -354,7 +376,8 @@ impl PowerManager for SimplePowerManager {
     }
 
     fn current_power_consumption(&self) -> f32 {
-        self.energy_profile.power_consumption(&self.current_state, 1.0) // Assuming full load
+        self.energy_profile
+            .power_consumption(&self.current_state, 1.0) // Assuming full load
     }
 
     fn get_energy_profile(&self) -> &EnergyProfile {
@@ -409,9 +432,16 @@ impl XpuOptimizer {
 
     fn report_cluster_utilization(&self) -> Result<(), XpuOptimizerError> {
         let total_nodes = self.node_pool.len();
-        let active_nodes = self.node_pool.iter().filter(|node| node.status == NodeStatus::Active).count();
+        let active_nodes = self
+            .node_pool
+            .iter()
+            .filter(|node| node.status == NodeStatus::Active)
+            .count();
         let utilization = (active_nodes as f32 / total_nodes as f32) * 100.0;
-        info!("Cluster utilization: {:.2}% ({} active nodes out of {})", utilization, active_nodes, total_nodes);
+        info!(
+            "Cluster utilization: {:.2}% ({} active nodes out of {})",
+            utilization, active_nodes, total_nodes
+        );
         Ok(())
     }
 
@@ -458,11 +488,6 @@ pub enum MemoryManagerType {
 }
 
 // TaskScheduler trait is already defined in task_scheduling.rs, so we remove it here
-
-
-
-
-
 
 #[derive(Error, Debug)]
 pub enum XpuOptimizerError {
@@ -521,23 +546,40 @@ pub enum XpuOptimizerError {
 // Default implementations for traits
 struct DefaultDistributedScheduler;
 impl DefaultDistributedScheduler {
-    fn new() -> Self { DefaultDistributedScheduler }
+    fn new() -> Self {
+        DefaultDistributedScheduler
+    }
 }
 impl DistributedScheduler for DefaultDistributedScheduler {
-    fn schedule_tasks<'a>(&'a self, tasks: &'a [Task], nodes: &'a [ClusterNode]) -> Pin<Box<dyn Future<Output = Result<Vec<(Task, ClusterNode)>, XpuOptimizerError>> + Send + 'a>> {
+    fn schedule_tasks<'a>(
+        &'a self,
+        tasks: &'a [Task],
+        nodes: &'a [ClusterNode],
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Vec<(Task, ClusterNode)>, XpuOptimizerError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             // Implement a basic round-robin scheduling
-            Ok(tasks.iter().zip(nodes.iter().cycle()).map(|(t, n)| (t.clone(), n.clone())).collect())
+            Ok(tasks
+                .iter()
+                .zip(nodes.iter().cycle())
+                .map(|(t, n)| (t.clone(), n.clone()))
+                .collect())
         })
     }
 }
 
 struct DefaultMLOptimizer;
 impl DefaultMLOptimizer {
-    fn new() -> Self { DefaultMLOptimizer }
+    fn new() -> Self {
+        DefaultMLOptimizer
+    }
 }
 impl MachineLearningOptimizer for DefaultMLOptimizer {
-    fn optimize(&self, historical_data: &[TaskExecutionData]) -> Result<SchedulingStrategy, XpuOptimizerError> {
+    fn optimize(
+        &self,
+        historical_data: &[TaskExecutionData],
+    ) -> Result<SchedulingStrategy, XpuOptimizerError> {
         // Placeholder implementation
         Ok(SchedulingStrategy::RoundRobin)
     }
@@ -565,7 +607,9 @@ impl MLModel for DefaultMLOptimizer {
 
 struct DefaultCloudOffloader;
 impl DefaultCloudOffloader {
-    fn new() -> Self { DefaultCloudOffloader }
+    fn new() -> Self {
+        DefaultCloudOffloader
+    }
 }
 impl CloudOffloader for DefaultCloudOffloader {
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
@@ -598,7 +642,9 @@ impl DistributedMemoryManager for DefaultDistributedMemoryManager {
             self.memory_pool.insert(task_id, size);
             Ok(())
         } else {
-            Err(XpuOptimizerError::MemoryError("Not enough memory available".to_string()))
+            Err(XpuOptimizerError::MemoryError(
+                "Not enough memory available".to_string(),
+            ))
         }
     }
 
@@ -607,7 +653,9 @@ impl DistributedMemoryManager for DefaultDistributedMemoryManager {
             self.allocated_memory = self.allocated_memory.saturating_sub(size);
             Ok(())
         } else {
-            Err(XpuOptimizerError::MemoryError("Task not found in memory pool".to_string()))
+            Err(XpuOptimizerError::MemoryError(
+                "Task not found in memory pool".to_string(),
+            ))
         }
     }
 
@@ -615,10 +663,6 @@ impl DistributedMemoryManager for DefaultDistributedMemoryManager {
         self.allocated_memory
     }
 }
-
-
-
-
 
 struct DefaultClusterManager {
     nodes: HashMap<String, ClusterNode>,
@@ -635,7 +679,10 @@ impl DefaultClusterManager {
 impl ClusterManager for DefaultClusterManager {
     fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError> {
         if self.nodes.contains_key(&node.id) {
-            Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} already exists", node.id)))
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} already exists",
+                node.id
+            )))
         } else {
             self.nodes.insert(node.id.clone(), node);
             Ok(())
@@ -646,7 +693,10 @@ impl ClusterManager for DefaultClusterManager {
         if self.nodes.remove(node_id).is_some() {
             Ok(())
         } else {
-            Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} not found", node_id)))
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )))
         }
     }
 
@@ -658,22 +708,35 @@ impl ClusterManager for DefaultClusterManager {
         self.nodes.values().collect()
     }
 
-    fn update_node_status(&mut self, node_id: &str, status: NodeStatus) -> Result<(), XpuOptimizerError> {
+    fn update_node_status(
+        &mut self,
+        node_id: &str,
+        status: NodeStatus,
+    ) -> Result<(), XpuOptimizerError> {
         if let Some(node) = self.nodes.get_mut(node_id) {
             node.status = status;
             Ok(())
         } else {
-            Err(XpuOptimizerError::ClusterInitializationError(format!("Node with ID {} not found", node_id)))
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )))
         }
     }
 }
 
 struct DefaultScalingPolicy;
 impl DefaultScalingPolicy {
-    fn new() -> Self { DefaultScalingPolicy }
+    fn new() -> Self {
+        DefaultScalingPolicy
+    }
 }
 impl ScalingPolicy for DefaultScalingPolicy {
-    fn determine_scaling_action(&self, current_load: f32, available_resources: usize) -> ScalingAction {
+    fn determine_scaling_action(
+        &self,
+        current_load: f32,
+        available_resources: usize,
+    ) -> ScalingAction {
         if current_load > 0.8 && available_resources < 5 {
             ScalingAction::ScaleUp(1)
         } else if current_load < 0.2 && available_resources > 1 {
@@ -686,20 +749,34 @@ impl ScalingPolicy for DefaultScalingPolicy {
 
 struct DefaultLoadBalancer;
 impl DefaultLoadBalancer {
-    fn new() -> Self { DefaultLoadBalancer }
+    fn new() -> Self {
+        DefaultLoadBalancer
+    }
 }
 impl LoadBalancer for DefaultLoadBalancer {
-    fn distribute_tasks(&self, tasks: &[Task], nodes: &[ClusterNode]) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
+    fn distribute_tasks(
+        &self,
+        tasks: &[Task],
+        nodes: &[ClusterNode],
+    ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
         let mut distribution = HashMap::new();
-        let active_nodes: Vec<_> = nodes.iter().filter(|n| n.status == NodeStatus::Active).collect();
+        let active_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.status == NodeStatus::Active)
+            .collect();
 
         if active_nodes.is_empty() {
-            return Err(XpuOptimizerError::TaskDistributionError("No active nodes available".to_string()));
+            return Err(XpuOptimizerError::TaskDistributionError(
+                "No active nodes available".to_string(),
+            ));
         }
 
         for (i, task) in tasks.iter().enumerate() {
             let node = &active_nodes[i % active_nodes.len()];
-            distribution.entry(node.id.clone()).or_insert_with(Vec::new).push(task.clone());
+            distribution
+                .entry(node.id.clone())
+                .or_insert_with(Vec::new)
+                .push(task.clone());
         }
 
         Ok(distribution)
@@ -708,7 +785,9 @@ impl LoadBalancer for DefaultLoadBalancer {
 
 struct DefaultMLModel;
 impl DefaultMLModel {
-    fn new() -> Self { DefaultMLModel }
+    fn new() -> Self {
+        DefaultMLModel
+    }
 }
 impl MLModel for DefaultMLModel {
     fn train(&mut self, _historical_data: &[TaskExecutionData]) {
@@ -736,7 +815,10 @@ impl XpuOptimizer {
         let processing_units = (0..config.num_processing_units)
             .map(|_| ProcessingUnit::new(ProcessingUnitType::CPU, 1.0))
             .collect::<Vec<_>>();
-        let unit_loads = processing_units.iter().map(|unit| (unit.unit_type.clone(), 0.0)).collect();
+        let unit_loads = processing_units
+            .iter()
+            .map(|unit| (unit.unit_type.clone(), 0.0))
+            .collect();
 
         #[cfg(feature = "cuda_support")]
         let cuda_context = unsafe {
@@ -752,16 +834,18 @@ impl XpuOptimizer {
         let pytorch_device = tch::Device::Cuda(0);
 
         #[cfg(feature = "kubernetes_support")]
-        let kubernetes_client = kube::Client::try_default().await
-            .map_err(|e| {
-                warn!("Failed to initialize Kubernetes client: {}", e);
-                XpuOptimizerError::KubernetesInitializationError(e.to_string())
-            })?;
+        let kubernetes_client = kube::Client::try_default().await.map_err(|e| {
+            warn!("Failed to initialize Kubernetes client: {}", e);
+            XpuOptimizerError::KubernetesInitializationError(e.to_string())
+        })?;
 
-        let distributed_scheduler: Box<dyn DistributedScheduler> = Box::new(DefaultDistributedScheduler::new());
+        let distributed_scheduler: Box<dyn DistributedScheduler> =
+            Box::new(DefaultDistributedScheduler::new());
         let ml_optimizer: Box<dyn MachineLearningOptimizer> = Box::new(DefaultMLOptimizer::new());
         let cloud_offloader: Box<dyn CloudOffloader> = Box::new(DefaultCloudOffloader::new());
-        let distributed_memory_manager: Box<dyn DistributedMemoryManager> = Box::new(DefaultDistributedMemoryManager::new(config.memory_pool_size));
+        let distributed_memory_manager: Box<dyn DistributedMemoryManager> = Box::new(
+            DefaultDistributedMemoryManager::new(config.memory_pool_size),
+        );
         let power_manager: Box<dyn PowerManager> = Box::new(SimplePowerManager::new());
         let energy_monitor = EnergyMonitor::new();
         let power_policy = PowerPolicy::default();
@@ -772,14 +856,24 @@ impl XpuOptimizer {
         let ml_model: Box<dyn MLModel> = Box::new(DefaultMLModel::new());
 
         let scheduler = match config.scheduler_type {
-            SchedulerType::RoundRobin => Box::new(RoundRobinScheduler::new()) as Box<dyn TaskScheduler>,
-            SchedulerType::LoadBalancing => Box::new(LoadBalancingScheduler::new()) as Box<dyn TaskScheduler>,
-            SchedulerType::AIPredictive => Box::new(AIOptimizedScheduler::new(ml_model.clone())) as Box<dyn TaskScheduler>,
+            SchedulerType::RoundRobin => {
+                Box::new(RoundRobinScheduler::new()) as Box<dyn TaskScheduler>
+            }
+            SchedulerType::LoadBalancing => {
+                Box::new(LoadBalancingScheduler::new()) as Box<dyn TaskScheduler>
+            }
+            SchedulerType::AIPredictive => {
+                Box::new(AIOptimizedScheduler::new(ml_model.clone())) as Box<dyn TaskScheduler>
+            }
         };
 
         let memory_manager: Box<dyn MemoryManager> = match config.memory_manager_type {
-            MemoryManagerType::Simple => Box::new(SimpleMemoryManager::new(config.memory_pool_size)),
-            MemoryManagerType::Dynamic => Box::new(DynamicMemoryManager::new(4096, config.memory_pool_size)),
+            MemoryManagerType::Simple => {
+                Box::new(SimpleMemoryManager::new(config.memory_pool_size))
+            }
+            MemoryManagerType::Dynamic => {
+                Box::new(DynamicMemoryManager::new(4096, config.memory_pool_size))
+            }
         };
 
         Ok(XpuOptimizer {
@@ -858,8 +952,9 @@ impl XpuOptimizer {
         let duration = end_time.duration_since(start_time);
 
         // Update latency information
-        let mut latency_monitor = self.latency_monitor.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e)))?;
+        let mut latency_monitor = self.latency_monitor.lock().map_err(|e| {
+            XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+        })?;
 
         // Record start and end times
         latency_monitor.record_start(task.id, start_time)?;
@@ -875,21 +970,27 @@ impl XpuOptimizer {
         self.resolve_dependencies()?;
 
         let tasks: Vec<Task> = self.task_queue.iter().cloned().collect();
-        let scheduled_tasks = self.scheduler.schedule(
-            &tasks,
-            &self.processing_units
-        ).await?;
+        let scheduled_tasks = self
+            .scheduler
+            .schedule(&tasks, &self.processing_units)
+            .await?;
 
         for (task, unit) in scheduled_tasks {
             let start = Instant::now();
             let duration = self.execute_task(&task).await?;
             let end = start + duration;
 
-            self.latency_monitor.lock()
-                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e)))?
+            self.latency_monitor
+                .lock()
+                .map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+                })?
                 .record_end(task.id, end)?;
 
-            info!("Task {} completed in {:?} on unit {:?}", task.id, duration, unit.unit_type);
+            info!(
+                "Task {} completed in {:?} on unit {:?}",
+                task.id, duration, unit.unit_type
+            );
             self.update_task_history(task.id, duration, true);
         }
 
@@ -919,9 +1020,13 @@ impl XpuOptimizer {
     fn load_balancing_scheduling(&mut self) -> Result<(), XpuOptimizerError> {
         self.scheduled_tasks.clear();
         for task in &self.task_queue {
-            let best_unit = self.processing_units.iter_mut()
+            let best_unit = self
+                .processing_units
+                .iter_mut()
                 .min_by_key(|unit| unit.current_load as u32)
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No processing units available".to_string()))?;
+                .ok_or_else(|| {
+                    XpuOptimizerError::SchedulingError("No processing units available".to_string())
+                })?;
 
             if best_unit.can_handle_task(task) {
                 best_unit.assign_task(task);
@@ -939,12 +1044,17 @@ impl XpuOptimizer {
         self.scheduled_tasks.clear();
         for task in &self.task_queue {
             let predicted_duration = self.predict_task_duration(task);
-            let best_unit = self.processing_units.iter_mut()
+            let best_unit = self
+                .processing_units
+                .iter_mut()
                 .min_by_key(|unit| {
-                    let predicted_completion_time = unit.current_load as u32 + predicted_duration.as_secs() as u32;
+                    let predicted_completion_time =
+                        unit.current_load as u32 + predicted_duration.as_secs() as u32;
                     predicted_completion_time
                 })
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No processing units available".to_string()))?;
+                .ok_or_else(|| {
+                    XpuOptimizerError::SchedulingError("No processing units available".to_string())
+                })?;
 
             if best_unit.can_handle_task(task) {
                 best_unit.assign_task(task);
@@ -997,7 +1107,10 @@ impl XpuOptimizer {
             }
         }
 
-        let position = self.task_queue.iter().position(|t| t.priority < task.priority);
+        let position = self
+            .task_queue
+            .iter()
+            .position(|t| t.priority < task.priority);
         let cloned_task = task.clone(); // Clone the task before moving it
         match position {
             Some(index) => self.task_queue.insert(index, cloned_task),
@@ -1017,18 +1130,21 @@ impl XpuOptimizer {
                 self.task_graph.remove_node(node);
             }
 
-            let mut latency_monitor = self.latency_monitor.lock()
-                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e)))?;
+            let mut latency_monitor = self.latency_monitor.lock().map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+            })?;
 
             {
-                let mut start_times = latency_monitor.start_times.lock()
-                    .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e)))?;
+                let mut start_times = latency_monitor.start_times.lock().map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+                })?;
                 start_times.remove(&task_id);
             }
 
             {
-                let mut end_times = latency_monitor.end_times.lock()
-                    .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?;
+                let mut end_times = latency_monitor.end_times.lock().map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e))
+                })?;
                 end_times.remove(&task_id);
             }
 
@@ -1047,7 +1163,9 @@ impl XpuOptimizer {
                 let mut new_queue = VecDeque::new();
                 for &node in order.iter() {
                     if let Some(task_id) = self.task_graph.node_weight(node) {
-                        if let Some(task) = self.task_queue.iter().find(|t| t.id == *task_id).cloned() {
+                        if let Some(task) =
+                            self.task_queue.iter().find(|t| t.id == *task_id).cloned()
+                        {
                             new_queue.push_back(task);
                         }
                     }
@@ -1068,32 +1186,42 @@ impl XpuOptimizer {
 
         let total_memory = match &self.memory_strategy {
             MemoryStrategy::Dynamic => {
-                self.memory_manager.allocate(&self.task_queue, &mut self.memory_pool)?;
+                self.memory_manager
+                    .allocate(&self.task_queue, &mut self.memory_pool)?;
                 self.memory_pool.iter().sum()
-            },
+            }
             MemoryStrategy::Static(size) => {
                 if self.memory_pool.is_empty() {
                     self.memory_pool.push(*size);
                 }
                 *size
-            },
+            }
             MemoryStrategy::Custom(strategy) => {
                 strategy.allocate_memory(&mut self.memory_pool, &self.task_queue)?
-            },
+            }
         };
 
         let end_time = Instant::now();
         let duration = end_time.duration_since(start_time);
-        info!("Memory allocated for tasks: {} bytes in {:?}", total_memory, duration);
+        info!(
+            "Memory allocated for tasks: {} bytes in {:?}",
+            total_memory, duration
+        );
         Ok(())
     }
 
     fn report_latencies(&self) {
-        let latency_monitor = self.latency_monitor.lock()
+        let latency_monitor = self
+            .latency_monitor
+            .lock()
             .expect("Failed to lock latency monitor");
-        let start_times = latency_monitor.start_times.lock()
+        let start_times = latency_monitor
+            .start_times
+            .lock()
             .expect("Failed to lock start_times");
-        let end_times = latency_monitor.end_times.lock()
+        let end_times = latency_monitor
+            .end_times
+            .lock()
             .expect("Failed to lock end_times");
 
         for (task_id, start_time) in start_times.iter() {
@@ -1101,11 +1229,16 @@ impl XpuOptimizer {
                 let duration = end_time.duration_since(*start_time);
                 if let Some(task) = self.task_queue.iter().find(|t| t.id == *task_id) {
                     let deadline_met = duration <= task.execution_time;
-                    info!("Task {} - Latency: {:?}, Deadline: {:?}, Met: {}",
-                          task_id, duration, task.execution_time, deadline_met);
+                    info!(
+                        "Task {} - Latency: {:?}, Deadline: {:?}, Met: {}",
+                        task_id, duration, task.execution_time, deadline_met
+                    );
                     if !deadline_met {
-                        warn!("Task {} missed its deadline by {:?}",
-                              task_id, duration - task.execution_time);
+                        warn!(
+                            "Task {} missed its deadline by {:?}",
+                            task_id,
+                            duration - task.execution_time
+                        );
                     }
                 } else {
                     warn!("Task {} not found in queue", task_id);
@@ -1150,7 +1283,10 @@ impl XpuOptimizer {
     // The train_ml_model method has been removed as it's no longer needed.
     // The ml_optimizer is now responsible for training and optimizing the model.
 
-    fn update_scheduling_parameters(&mut self, new_strategy: SchedulingStrategy) -> Result<(), XpuOptimizerError> {
+    fn update_scheduling_parameters(
+        &mut self,
+        new_strategy: SchedulingStrategy,
+    ) -> Result<(), XpuOptimizerError> {
         // Update scheduling parameters based on the optimized strategy
         self.scheduling_strategy = new_strategy.clone();
         // Update the scheduler based on the new strategy
@@ -1164,17 +1300,24 @@ impl XpuOptimizer {
 
     fn get_historical_task_data(&self) -> Vec<HistoricalTaskData> {
         // Retrieve and preprocess historical task data
-        self.task_history.iter().map(|task| HistoricalTaskData {
-            task_id: task.id,
-            execution_time: task.execution_time,
-            memory_usage: task.memory_requirement,
-            processing_unit: task.unit.unit_type.clone(),
-            priority: task.priority,
-        }).collect()
+        self.task_history
+            .iter()
+            .map(|task| HistoricalTaskData {
+                task_id: task.id,
+                execution_time: task.execution_time,
+                memory_usage: task.memory_requirement,
+                processing_unit: task.unit.unit_type.clone(),
+                priority: task.priority,
+            })
+            .collect()
     }
 
     fn optimize_schedule_based_on_predictions(&mut self, prediction: TaskPrediction) {
-        if let Some(task) = self.task_queue.iter_mut().find(|t| t.id == prediction.task_id) {
+        if let Some(task) = self
+            .task_queue
+            .iter_mut()
+            .find(|t| t.id == prediction.task_id)
+        {
             task.estimated_duration = prediction.estimated_duration;
             task.estimated_resource_usage = prediction.estimated_resource_usage;
         }
@@ -1186,7 +1329,9 @@ impl XpuOptimizer {
         sorted_tasks.sort_by(|a, b| {
             let a_score = a.priority as f32 / a.estimated_duration.as_secs_f32();
             let b_score = b.priority as f32 / b.estimated_duration.as_secs_f32();
-            b_score.partial_cmp(&a_score).unwrap_or(std::cmp::Ordering::Equal)
+            b_score
+                .partial_cmp(&a_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         self.task_queue.extend(sorted_tasks);
     }
@@ -1224,10 +1369,10 @@ impl XpuOptimizer {
                     self.kubernetes_client = Some(client);
                     info!("Successfully connected to Kubernetes cluster");
                     Ok(())
-                },
-                Err(e) => {
-                    Err(XpuOptimizerError::KubernetesInitializationError(e.to_string()))
                 }
+                Err(e) => Err(XpuOptimizerError::KubernetesInitializationError(
+                    e.to_string(),
+                )),
             }
         }
         #[cfg(not(feature = "kubernetes_support"))]
@@ -1243,16 +1388,28 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn add_user(&mut self, username: String, password: String, role: UserRole) -> Result<(), XpuOptimizerError> {
+    fn add_user(
+        &mut self,
+        username: String,
+        password: String,
+        role: UserRole,
+    ) -> Result<(), XpuOptimizerError> {
         if self.users.contains_key(&username) {
             return Err(XpuOptimizerError::UserAlreadyExistsError(username));
         }
         let salt = SaltString::generate(&mut rand::thread_rng());
         let argon2 = Argon2::default();
-        let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
             .map_err(|e| XpuOptimizerError::PasswordHashingError(e.to_string()))?
             .to_string();
-        self.users.insert(username, User { role, password_hash });
+        self.users.insert(
+            username,
+            User {
+                role,
+                password_hash,
+            },
+        );
         Ok(())
     }
 
@@ -1261,15 +1418,26 @@ impl XpuOptimizer {
             return Err(XpuOptimizerError::UserNotFoundError(username.to_string()));
         }
         // Remove any active sessions for the removed user
-        self.sessions.retain(|_, session| session.user_id != username);
+        self.sessions
+            .retain(|_, session| session.user_id != username);
         Ok(())
     }
 
-    fn authenticate_user(&mut self, username: &str, password: &str) -> Result<String, XpuOptimizerError> {
-        let user = self.users.get(username).ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+    fn authenticate_user(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<String, XpuOptimizerError> {
+        let user = self
+            .users
+            .get(username)
+            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
         let parsed_hash = PasswordHash::new(&user.password_hash)
             .map_err(|_| XpuOptimizerError::AuthenticationError)?;
-        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+        if Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             let token = self.generate_jwt_token(username, &user.role)?;
             let session = Session {
                 user_id: username.to_string(),
@@ -1282,7 +1450,11 @@ impl XpuOptimizer {
         }
     }
 
-    fn generate_jwt_token(&self, username: &str, role: &UserRole) -> Result<String, XpuOptimizerError> {
+    fn generate_jwt_token(
+        &self,
+        username: &str,
+        role: &UserRole,
+    ) -> Result<String, XpuOptimizerError> {
         let expiration = Utc::now()
             .checked_add_signed(chrono::Duration::hours(24))
             .expect("valid timestamp")
@@ -1295,19 +1467,28 @@ impl XpuOptimizer {
         };
 
         let header = Header::new(Algorithm::HS256);
-        encode(&header, &claims, &EncodingKey::from_secret(self.jwt_secret.as_ref()))
-            .map_err(|_| XpuOptimizerError::TokenGenerationError)
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(self.jwt_secret.as_ref()),
+        )
+        .map_err(|_| XpuOptimizerError::TokenGenerationError)
     }
 
-    fn check_user_permission(&self, role: &UserRole, required_permission: Permission) -> Result<bool, XpuOptimizerError> {
+    fn check_user_permission(
+        &self,
+        role: &UserRole,
+        required_permission: Permission,
+    ) -> Result<bool, XpuOptimizerError> {
         Ok(match role {
             UserRole::Admin => true, // Admin has all permissions
-            UserRole::Manager => {
-                !matches!(required_permission, Permission::ManageUsers)
-            },
+            UserRole::Manager => !matches!(required_permission, Permission::ManageUsers),
             UserRole::User => {
-                matches!(required_permission, Permission::ViewTasks | Permission::AddTask)
-            },
+                matches!(
+                    required_permission,
+                    Permission::ViewTasks | Permission::AddTask
+                )
+            }
         })
     }
 
@@ -1321,18 +1502,25 @@ impl XpuOptimizer {
 
     fn get_user_from_token(&self, token: &str) -> Result<User, XpuOptimizerError> {
         let username = self.validate_jwt_token(token)?;
-        self.users.get(&username)
+        self.users
+            .get(&username)
             .cloned()
             .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username))
     }
 
     fn create_session(&mut self, username: &str) -> Result<String, XpuOptimizerError> {
-        let user = self.users.get(username).ok_or(XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+        let user = self
+            .users
+            .get(username)
+            .ok_or(XpuOptimizerError::UserNotFoundError(username.to_string()))?;
         let token = self.generate_jwt_token(username, &user.role)?;
-        self.sessions.insert(token.clone(), Session {
-            user_id: username.to_string(),
-            expiration: Utc::now() + chrono::Duration::hours(24),
-        });
+        self.sessions.insert(
+            token.clone(),
+            Session {
+                user_id: username.to_string(),
+                expiration: Utc::now() + chrono::Duration::hours(24),
+            },
+        );
         Ok(token)
     }
 
@@ -1363,13 +1551,16 @@ impl XpuOptimizer {
     }
 
     fn calculate_energy_consumption(&self) -> f32 {
-        self.processing_units.iter()
+        self.processing_units
+            .iter()
             .map(|unit| unit.energy_profile.consumption_rate * unit.current_load)
             .sum()
     }
 
     fn optimize_energy_efficiency(&mut self) -> Result<(), XpuOptimizerError> {
-        let new_states: Vec<_> = self.processing_units.iter()
+        let new_states: Vec<_> = self
+            .processing_units
+            .iter()
             .map(|unit| self.calculate_optimal_power_state(unit))
             .collect();
 

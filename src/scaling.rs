@@ -1,7 +1,11 @@
 use std::time::Duration;
 
 pub trait ScalingPolicy: Send + Sync {
-    fn determine_scaling_action(&self, current_load: f32, available_resources: usize) -> ScalingAction;
+    fn determine_scaling_action(
+        &self,
+        current_load: f32,
+        available_resources: usize,
+    ) -> ScalingAction;
 }
 
 pub enum ScalingAction {
@@ -18,7 +22,11 @@ pub struct DynamicScalingPolicy {
 }
 
 impl DynamicScalingPolicy {
-    pub fn new(scale_up_threshold: f32, scale_down_threshold: f32, cooldown_period: Duration) -> Self {
+    pub fn new(
+        scale_up_threshold: f32,
+        scale_down_threshold: f32,
+        cooldown_period: Duration,
+    ) -> Self {
         Self {
             scale_up_threshold,
             scale_down_threshold,
@@ -29,7 +37,11 @@ impl DynamicScalingPolicy {
 }
 
 impl ScalingPolicy for DynamicScalingPolicy {
-    fn determine_scaling_action(&self, current_load: f32, available_resources: usize) -> ScalingAction {
+    fn determine_scaling_action(
+        &self,
+        current_load: f32,
+        available_resources: usize,
+    ) -> ScalingAction {
         let now = std::time::Instant::now();
 
         if let Some(last_action) = self.last_action_time {

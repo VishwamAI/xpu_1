@@ -1,4 +1,6 @@
-use crate::{Task, XpuOptimizerError, ProcessingUnit, ProcessingUnitType, PowerState, EnergyProfile};
+use crate::{
+    EnergyProfile, PowerState, ProcessingUnit, ProcessingUnitType, Task, XpuOptimizerError,
+};
 
 pub trait CloudOffloader: Send + Sync {
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError>;

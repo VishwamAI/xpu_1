@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use xpu_manager_rust::{TaskScheduler, Task, MemoryManager, PowerManager};
 use std::time::Duration;
+use xpu_manager_rust::{MemoryManager, PowerManager, Task, TaskScheduler};
 
 fn create_test_scheduler() -> TaskScheduler {
     TaskScheduler::new(4)
@@ -61,5 +61,11 @@ fn benchmark_power_management(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, benchmark_add_task, benchmark_schedule_tasks, benchmark_manage_memory, benchmark_power_management);
+criterion_group!(
+    benches,
+    benchmark_add_task,
+    benchmark_schedule_tasks,
+    benchmark_manage_memory,
+    benchmark_power_management
+);
 criterion_main!(benches);

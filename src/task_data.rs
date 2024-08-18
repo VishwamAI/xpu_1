@@ -1,6 +1,6 @@
+use crate::{ProcessingUnit, ProcessingUnitType};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use crate::{ProcessingUnitType, ProcessingUnit};
-use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskExecutionData {
@@ -69,6 +69,7 @@ impl TaskDataManager for InMemoryTaskDataManager {
 
     fn clear_old_data(&mut self, threshold: Duration) {
         let now = std::time::Instant::now();
-        self.execution_data.retain(|data| now.duration_since(std::time::Instant::now()) < threshold);
+        self.execution_data
+            .retain(|data| now.duration_since(std::time::Instant::now()) < threshold);
     }
 }
