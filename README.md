@@ -16,7 +16,7 @@ To use XPU Manager Rust, you need to have Rust installed on your system. If you 
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/xpu_manager_rust.git
+   git clone https://https://github.com/VishwamAI/xpu_1.git
    cd xpu_manager_rust
    ```
 
