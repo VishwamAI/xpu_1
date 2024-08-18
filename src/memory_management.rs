@@ -24,12 +24,11 @@ impl MemoryManager {
         Ok(())
     }
 
-    // This method is currently unused but may be useful for future memory management features.
-    // Consider implementing memory deallocation in task completion or error handling scenarios.
+    // Deallocate memory when a task is completed or encounters an error
     pub fn deallocate(&mut self, size: usize) -> Result<(), String> {
         if let Some(index) = self.memory_pool.iter().position(|&x| x == size) {
             self.memory_pool.remove(index);
-            self.allocated_memory -= size;
+            self.allocated_memory = self.allocated_memory.saturating_sub(size);
             Ok(())
         } else {
             Err("Memory block not found".to_string())

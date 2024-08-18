@@ -1,4 +1,4 @@
-use xpu_1::{
+use xpu_manager_rust::{
     task_scheduling::{TaskScheduler, Task},
     memory_management::MemoryManager,
     power_management::{PowerManager, PowerState},
