@@ -63,6 +63,23 @@ fn main() {
 }
 ```
 
+## Benchmarks
+
+XPU Manager Rust includes a set of benchmarks to evaluate performance across different processing units:
+
+1. CPU Benchmark: Measures task scheduling and execution performance on CPUs.
+2. GPU Benchmark: Evaluates parallel processing capabilities using GPUs.
+3. TPU Benchmark: Tests tensor processing operations on TPUs.
+4. NPU Benchmark: Assesses neural network inference performance on NPUs.
+
+These benchmarks are integrated into our GitHub Actions workflow, ensuring consistent performance across different environments and code changes. To run the benchmarks locally:
+
+```
+cargo bench
+```
+
+The GitHub Actions workflow automatically runs these benchmarks on every push and pull request to the main branch. You can view the benchmark results in the Actions tab of the GitHub repository.
+
 ## Contributing
 
 Contributions to XPU Manager Rust are welcome! Please follow these steps to contribute:
