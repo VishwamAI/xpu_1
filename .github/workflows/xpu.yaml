@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - github-actions-setup
+      - xpu-update
   pull_request:
     branches:
       - main
@@ -45,7 +46,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/xpu-update'
 
     steps:
     - name: Checkout code
