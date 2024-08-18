@@ -1,55 +1,109 @@
-use std::collections::{VecDeque, HashMap};
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::algo::toposort;
-use log::{info, warn, error};
-use thiserror::Error;
-use std::time::{Instant, Duration};
-use rand::Rng;
-use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use crossbeam::channel::{bounded, Sender, Receiver};
-use rayon::prelude::*;
-use ndarray::{Array2, arr2};
-use ndarray_stats::QuantileExt;
-use tokio::runtime::Runtime;
-use futures::future::join_all;
-use dashmap::DashMap;
+use std::time::{Duration, Instant};
 
-mod profiling;
-use profiling::Profiler;
+use argon2::{
+    self, password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+};
+use chrono::Utc;
+use futures::future::Future;
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use log::{error, info, warn};
+use petgraph::algo::toposort;
+use petgraph::graph::{DiGraph, NodeIndex};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tokio;
 
 // External library integrations
+#[cfg(feature = "cuda_support")]
 use cuda::prelude::*;
-use tensorflow::{Graph, Session, Tensor};
-use tch::{Device, Tensor as TorchTensor};
-
-// Job scheduler integrations
-use slurm_rs::prelude::*;
-use k8s_openapi::api::batch::v1::Job;
-use mesos::Scheduler;
-
-// User and role management
-use argon2::{self, Config};
-use jsonwebtoken::{encode, decode, Header, Algorithm, Validation, EncodingKey, DecodingKey, errors::Error as JwtError};
-use serde::{Serialize, Deserialize};
-
-// Google Cloud SDK
-use google_cloud_storage::client::Client as GcsClient;
+#[cfg(feature = "google_cloud_support")]
 use google_cloud_pubsub::client::Client as PubsubClient;
+#[cfg(feature = "google_cloud_support")]
+use google_cloud_storage::client::Client as GcsClient;
+#[cfg(feature = "kubernetes_support")]
+use kube::Client as KubeClient;
+#[cfg(feature = "pytorch_support")]
+use tch::Device;
 
-// Kubernetes
-use kube::{
-    api::{Api, PostParams},
-    Client,
+// Custom modules
+use crate::cloud_offloading::CloudOffloader;
+use crate::cluster_management::{ClusterManager, ClusterNode, LoadBalancer, NodeStatus};
+use crate::distributed_memory::DistributedMemoryManager;
+use crate::memory_management::{
+    DynamicMemoryManager, MemoryManager, MemoryStrategy, SimpleMemoryManager,
+};
+use crate::ml_models::MLModel;
+use crate::power_management::{
+    EnergyMonitor, EnergyProfile, PowerManager, PowerPolicy, PowerState,
+};
+use crate::profiling::Profiler;
+use crate::resource_monitoring::ResourceMonitor;
+use crate::scaling::{ScalingAction, ScalingPolicy};
+use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
+use crate::task_scheduling::{
+    AIOptimizedScheduler, DistributedScheduler, LoadBalancingScheduler, RoundRobinScheduler,
+    SchedulingStrategy, TaskScheduler,
 };
 
-// Machine Learning
-use rusty_machine::learning::naive_bayes::{NaiveBayes, Gaussian};
-use rusty_machine::learning::SupModel;
+pub trait MachineLearningOptimizer: Send + Sync {
+    fn optimize(
+        &self,
+        historical_data: &[TaskExecutionData],
+    ) -> Result<SchedulingStrategy, XpuOptimizerError>;
+}
 
-// Power management
-use power_management::{PowerState, EnergyProfile};
+// Define ProcessingUnit, Task, and ProcessingUnitType here
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ProcessingUnit {
+    pub unit_type: ProcessingUnitType,
+    pub processing_power: f32,
+    pub current_load: f32,
+    #[serde(with = "PowerStateSerDe")]
+    pub power_state: PowerState,
+    #[serde(with = "EnergyProfileSerDe")]
+    pub energy_profile: EnergyProfile,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(remote = "PowerState")]
+enum PowerStateSerDe {
+    LowPower,
+    Normal,
+    HighPerformance,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(remote = "EnergyProfile")]
+struct EnergyProfileSerDe {
+    consumption_rate: f32,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub enum ProcessingUnitType {
+    CPU,
+    GPU,
+    NPU,
+    FPGA,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Task {
+    pub id: usize,
+    pub unit: ProcessingUnit,
+    pub priority: u8,
+    pub dependencies: Vec<usize>,
+    pub execution_time: Duration,
+    pub memory_requirement: usize,
+    pub secure: bool,
+    pub estimated_duration: Duration,
+    pub estimated_resource_usage: usize,
+}
+
+// CloudTaskOffloader trait removed as it's redundant with CloudOffloader
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -58,71 +112,180 @@ struct Claims {
     exp: usize,
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct ProcessingUnit {
-    unit_type: ProcessingUnitType,
-    processing_power: f32,
-    current_load: f32,
-    power_state: PowerState,
-    energy_profile: EnergyProfile,
-}
-
 impl ProcessingUnit {
-    fn available_capacity(&self) -> f32 {
+    pub fn new(unit_type: ProcessingUnitType, processing_power: f32) -> Self {
+        ProcessingUnit {
+            unit_type,
+            processing_power,
+            current_load: 0.0,
+            power_state: PowerState::Normal,
+            energy_profile: EnergyProfile::default(),
+        }
+    }
+
+    pub fn available_capacity(&self) -> f32 {
         self.processing_power - self.current_load
     }
 
-    fn can_handle_task(&self, task: &Task) -> bool {
+    pub fn can_handle_task(&self, task: &Task) -> bool {
         self.available_capacity() >= task.execution_time.as_secs_f32()
     }
 
-    fn assign_task(&mut self, task: &Task) {
+    pub fn assign_task(&mut self, task: &Task) {
         self.current_load += task.execution_time.as_secs_f32();
         self.adjust_power_state();
     }
 
-    fn update_load(&mut self) {
+    pub fn update_load(&mut self) {
         // Simulate load decrease over time
         self.current_load = (self.current_load - 0.1).max(0.0);
         self.adjust_power_state();
     }
 
-    fn adjust_power_state(&mut self) {
+    pub fn adjust_power_state(&mut self) {
         self.power_state = self.energy_profile.optimal_power_state(self.current_load);
     }
 
-    fn current_power_consumption(&self) -> f32 {
-        self.energy_profile.power_consumption(self.power_state, self.current_load)
+    pub fn current_power_consumption(&self) -> f32 {
+        self.energy_profile
+            .power_consumption(&self.power_state, self.current_load)
+    }
+
+    pub fn set_power_state(&mut self, state: PowerState) {
+        self.power_state = state;
+    }
+}
+
+impl Task {
+    pub fn new(
+        id: usize,
+        unit: ProcessingUnit,
+        priority: u8,
+        dependencies: Vec<usize>,
+        execution_time: Duration,
+        memory_requirement: usize,
+        secure: bool,
+    ) -> Self {
+        Task {
+            id,
+            unit,
+            priority,
+            dependencies,
+            execution_time,
+            memory_requirement,
+            secure,
+            estimated_duration: Duration::default(),
+            estimated_resource_usage: 0,
+        }
+    }
+}
+
+impl PartialEq for Task {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Task {}
+
+impl std::hash::Hash for Task {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+// TaskPrediction is now defined in task_data.rs, so we can remove this duplicate definition
+
+pub struct LatencyMonitor {
+    start_times: Arc<Mutex<HashMap<usize, Instant>>>,
+    end_times: Arc<Mutex<HashMap<usize, Instant>>>,
+}
+
+impl LatencyMonitor {
+    pub fn new() -> Self {
+        LatencyMonitor {
+            start_times: Arc::new(Mutex::new(HashMap::new())),
+            end_times: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn record_start(&self, task_id: usize, time: Instant) -> Result<(), XpuOptimizerError> {
+        self.start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
+            .insert(task_id, time);
+        Ok(())
+    }
+
+    pub fn record_end(&self, task_id: usize, time: Instant) -> Result<(), XpuOptimizerError> {
+        self.end_times
+            .lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
+            .insert(task_id, time);
+        Ok(())
+    }
+
+    pub fn get_latency(&self, task_id: usize) -> Result<Option<Duration>, XpuOptimizerError> {
+        let start = self
+            .start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
+            .get(&task_id)
+            .cloned();
+
+        let end = self
+            .end_times
+            .lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
+            .get(&task_id)
+            .cloned();
+
+        Ok(match (start, end) {
+            (Some(start), Some(end)) => Some(end.duration_since(start)),
+            _ => None,
+        })
+    }
+
+    pub fn remove_task(&self, task_id: usize) -> Result<(), XpuOptimizerError> {
+        self.start_times
+            .lock()
+            .map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+            })?
+            .remove(&task_id);
+        self.end_times
+            .lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e)))?
+            .remove(&task_id);
+        Ok(())
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum ProcessingUnitType {
-    CPU,
-    GPU,
-    NPU,
-    FPGA,
+pub enum UserRole {
+    Admin,
+    Manager,
+    User,
+}
+
+impl ToString for UserRole {
+    fn to_string(&self) -> String {
+        match self {
+            UserRole::Admin => "Admin".to_string(),
+            UserRole::Manager => "Manager".to_string(),
+            UserRole::User => "User".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct Task {
-    id: usize,
-    unit: ProcessingUnit,
-    priority: u8,
-    dependencies: Vec<usize>,
-    execution_time: Duration,
-    memory_requirement: usize, // Added memory requirement field
-    secure: bool, // Added secure field for secure task execution
-}
-
-pub struct LatencyMonitor {
-    start_times: HashMap<usize, Instant>,
-    end_times: HashMap<usize, Instant>,
-}
-
 pub struct User {
-    role: Role,
-    password_hash: String,
+    pub role: UserRole,
+    pub password_hash: String,
 }
 
 pub struct Role {
@@ -130,6 +293,7 @@ pub struct Role {
     permissions: Vec<Permission>,
 }
 
+#[derive(PartialEq, Clone, Debug)]
 pub enum Permission {
     AddTask,
     RemoveTask,
@@ -139,53 +303,177 @@ pub enum Permission {
 }
 
 pub struct XpuOptimizer {
-    task_queue: VecDeque<Task>,
-    task_graph: DiGraph<usize, ()>,
-    task_map: HashMap<usize, NodeIndex>,
-    memory_pool: Vec<usize>,
-    latency_monitor: LatencyMonitor,
-    processing_units: Vec<ProcessingUnit>,
-    unit_loads: HashMap<ProcessingUnit, f32>,
-    thread_pool: ThreadPool,
-    scheduler: Box<dyn TaskScheduler>,
-    memory_manager: Box<dyn MemoryManager>,
-    config: XpuOptimizerConfig,
-    cuda_context: Option<CudaContext>,
-    tensorflow_session: Option<TensorFlowSession>,
-    pytorch_device: Option<PyTorchDevice>,
-    slurm_connection: Option<SlurmConnection>,
-    kubernetes_client: Option<KubernetesClient>,
-    mesos_framework: Option<MesosFramework>,
-    users: HashMap<String, User>,
-    roles: HashMap<String, Role>,
-    current_user: Option<String>,
-    jwt_secret: Vec<u8>,
-    sessions: HashMap<String, Session>,
-    gcp_client: Option<GoogleCloudPlatformClient>,
-    distributed_scheduler: Box<dyn DistributedTaskScheduler>,
-    ml_optimizer: Box<dyn MachineLearningOptimizer>,
-    cloud_offloader: Box<dyn CloudTaskOffloader>,
-    distributed_memory_manager: Box<dyn DistributedMemoryManager>,
-    power_manager: Box<dyn PowerManager>,
-    energy_monitor: EnergyMonitor,
-    power_policy: PowerPolicy,
-    cluster_manager: Box<dyn ClusterManager>,
-    scaling_policy: Box<dyn ScalingPolicy>,
-    load_balancer: Box<dyn LoadBalancer>,
-    resource_monitor: ResourceMonitor,
-    node_pool: Vec<ClusterNode>,
+    pub task_queue: VecDeque<Task>,
+    pub task_graph: DiGraph<usize, ()>,
+    pub task_map: HashMap<usize, NodeIndex>,
+    pub memory_pool: Vec<usize>,
+    pub latency_monitor: Arc<Mutex<LatencyMonitor>>,
+    pub processing_units: Vec<ProcessingUnit>,
+    pub unit_loads: HashMap<ProcessingUnitType, f32>,
+    pub scheduler: Box<dyn TaskScheduler>,
+    pub memory_manager: Box<dyn MemoryManager>,
+    pub config: XpuOptimizerConfig,
+    #[cfg(feature = "cuda_support")]
+    pub cuda_context: Option<CudaContext>,
+    #[cfg(feature = "tensorflow_support")]
+    pub tensorflow_session: Option<tensorflow::Session>,
+    #[cfg(feature = "pytorch_support")]
+    pub pytorch_device: Option<tch::Device>,
+    #[cfg(feature = "kubernetes_support")]
+    pub kubernetes_client: Option<kube::Client>,
+    pub users: HashMap<String, User>,
+    pub roles: HashMap<String, Role>,
+    pub current_user: Option<String>,
+    pub jwt_secret: Vec<u8>,
+    pub sessions: HashMap<String, Session>,
+    #[cfg(feature = "google_cloud_support")]
+    pub gcp_client: Option<google_cloud_storage::client::Client>,
+    pub distributed_scheduler: Box<dyn DistributedScheduler>,
+    pub ml_optimizer: Box<dyn MachineLearningOptimizer>,
+    pub cloud_offloader: Box<dyn CloudOffloader>,
+    pub distributed_memory_manager: Box<dyn DistributedMemoryManager>,
+    pub power_manager: Box<dyn PowerManager>,
+    pub energy_monitor: EnergyMonitor,
+    pub power_policy: PowerPolicy,
+    pub cluster_manager: Box<dyn ClusterManager>,
+    pub scaling_policy: Box<dyn ScalingPolicy>,
+    pub load_balancer: Box<dyn LoadBalancer>,
+    pub resource_monitor: ResourceMonitor,
+    pub node_pool: Vec<ClusterNode>,
+    pub ml_model: Box<dyn MLModel>,
+    pub memory_strategy: MemoryStrategy,
+    pub scheduling_strategy: SchedulingStrategy,
+    pub task_history: Vec<TaskExecutionData>,
+    pub profiler: Profiler,
+    pub scheduled_tasks: Vec<Task>,
+}
+
+pub struct SimplePowerManager {
+    current_state: PowerState,
+    energy_profile: EnergyProfile,
+}
+
+impl SimplePowerManager {
+    pub fn new() -> Self {
+        SimplePowerManager {
+            current_state: PowerState::Normal,
+            energy_profile: EnergyProfile::default(),
+        }
+    }
+}
+
+impl PowerManager for SimplePowerManager {
+    fn set_power_state(&mut self, state: PowerState) {
+        self.current_state = state;
+    }
+
+    fn get_power_state(&self) -> PowerState {
+        self.current_state.clone()
+    }
+
+    fn optimize_power(&mut self, load: f32) {
+        self.current_state = self.energy_profile.optimal_power_state(load);
+    }
+
+    fn current_power_consumption(&self) -> f32 {
+        self.energy_profile
+            .power_consumption(&self.current_state, 1.0) // Assuming full load
+    }
+
+    fn get_energy_profile(&self) -> &EnergyProfile {
+        &self.energy_profile
+    }
+
+    fn set_energy_profile(&mut self, profile: EnergyProfile) {
+        self.energy_profile = profile;
+    }
+}
+
+impl XpuOptimizer {
+    // Implement methods here
+    fn update_task_history(&mut self, task_id: usize, duration: Duration, success: bool) {
+        if let Some(task) = self.task_queue.iter().find(|t| t.id == task_id) {
+            let execution_data = TaskExecutionData {
+                id: task.id,
+                execution_time: duration,
+                memory_usage: task.memory_requirement,
+                processing_unit: task.unit.unit_type.clone(),
+                priority: task.priority,
+                success,
+                memory_requirement: task.memory_requirement,
+                unit: task.unit.clone(),
+            };
+            self.task_history.push(execution_data);
+        } else {
+            warn!("Task with id {} not found in task queue", task_id);
+        }
+    }
+
+    fn adapt_scheduling_parameters(&mut self) -> Result<(), XpuOptimizerError> {
+        // Use historical data to adapt scheduling parameters
+        let optimized_strategy = self.ml_optimizer.optimize(&self.task_history)?;
+        self.update_scheduling_parameters(optimized_strategy.clone())?;
+
+        // Update the scheduler based on the optimized strategy
+        self.scheduler = match optimized_strategy {
+            SchedulingStrategy::RoundRobin => Box::new(RoundRobinScheduler),
+            SchedulingStrategy::LoadBalancing => Box::new(LoadBalancingScheduler),
+            SchedulingStrategy::AIOptimized(model) => Box::new(AIOptimizedScheduler::new(model)),
+        };
+
+        Ok(())
+    }
+
+    fn report_energy_consumption(&self) -> Result<(), XpuOptimizerError> {
+        let total_energy = self.calculate_energy_consumption();
+        info!("Total energy consumption: {} W", total_energy);
+        Ok(())
+    }
+
+    fn report_cluster_utilization(&self) -> Result<(), XpuOptimizerError> {
+        let total_nodes = self.node_pool.len();
+        let active_nodes = self
+            .node_pool
+            .iter()
+            .filter(|node| node.status == NodeStatus::Active)
+            .count();
+        let utilization = (active_nodes as f32 / total_nodes as f32) * 100.0;
+        info!(
+            "Cluster utilization: {:.2}% ({} active nodes out of {})",
+            utilization, active_nodes, total_nodes
+        );
+        Ok(())
+    }
+
+    fn disconnect_from_job_scheduler(&self) -> Result<(), XpuOptimizerError> {
+        info!("Disconnecting from job scheduler...");
+        // TODO: Implement actual disconnection logic
+        Ok(())
+    }
+
+    fn disconnect_from_cloud_services(&self) -> Result<(), XpuOptimizerError> {
+        info!("Disconnecting from cloud services...");
+        // TODO: Implement actual disconnection logic
+        Ok(())
+    }
+
+    fn disconnect_from_cluster(&self) -> Result<(), XpuOptimizerError> {
+        info!("Disconnecting from cluster...");
+        // TODO: Implement actual disconnection logic
+        Ok(())
+    }
 }
 
 pub struct Session {
-    user_id: String,
-    expiration: chrono::DateTime<chrono::Utc>,
+    pub user_id: String,
+    pub expiration: chrono::DateTime<chrono::Utc>,
 }
 
 pub struct XpuOptimizerConfig {
-    num_processing_units: usize,
-    memory_pool_size: usize,
-    scheduler_type: SchedulerType,
-    memory_manager_type: MemoryManagerType,
+    pub num_processing_units: usize,
+    pub memory_pool_size: usize,
+    pub scheduler_type: SchedulerType,
+    pub memory_manager_type: MemoryManagerType,
 }
 
 pub enum SchedulerType {
@@ -199,13 +487,7 @@ pub enum MemoryManagerType {
     Dynamic,
 }
 
-pub trait TaskScheduler: Send + Sync {
-    fn schedule(&mut self, tasks: &[Task], processing_units: &mut [ProcessingUnit]) -> Result<Vec<Task>, XpuOptimizerError>;
-}
-
-pub trait MemoryManager: Send + Sync {
-    fn allocate(&mut self, tasks: &[Task], memory_pool: &mut Vec<usize>) -> Result<(), XpuOptimizerError>;
-}
+// TaskScheduler trait is already defined in task_scheduling.rs, so we remove it here
 
 #[derive(Error, Debug)]
 pub enum XpuOptimizerError {
@@ -227,207 +509,497 @@ pub enum XpuOptimizerError {
     InsufficientPermissionsError,
     #[error("Authentication failed")]
     AuthenticationError,
+    #[error("Session not found")]
+    SessionNotFoundError,
+    #[error("Invalid session")]
+    InvalidSessionError,
+    #[error("Failed to generate token")]
+    TokenGenerationError,
+    #[error("Failed to hash password: {0}")]
+    PasswordHashingError(String),
+    #[error("CUDA initialization error: {0}")]
+    CudaInitializationError(String),
+    #[error("TensorFlow initialization error: {0}")]
+    TensorFlowInitializationError(String),
+    #[error("Kubernetes initialization error: {0}")]
+    KubernetesInitializationError(String),
+    #[error("Failed to offload task to cloud: {0}")]
+    CloudOffloadingError(String),
+    #[error("Failed to initialize cluster: {0}")]
+    ClusterInitializationError(String),
+    #[error("Failed to distribute tasks: {0}")]
+    TaskDistributionError(String),
+    #[error("Failed to optimize power consumption: {0}")]
+    PowerOptimizationError(String),
+    #[error("Failed to execute ML optimization: {0}")]
+    MLOptimizationError(String),
+    #[error("Failed to scale cluster resources: {0}")]
+    ClusterScalingError(String),
+    #[error("Load balancing error: {0}")]
+    LoadBalancingError(String),
+    #[error("Failed to acquire lock: {0}")]
+    LockError(String),
+    #[error("Task execution error: {0:?}")]
+    TaskExecutionError(Vec<XpuOptimizerError>),
+}
+
+// Default implementations for traits
+struct DefaultDistributedScheduler;
+impl DefaultDistributedScheduler {
+    fn new() -> Self {
+        DefaultDistributedScheduler
+    }
+}
+impl DistributedScheduler for DefaultDistributedScheduler {
+    fn schedule_tasks<'a>(
+        &'a self,
+        tasks: &'a [Task],
+        nodes: &'a [ClusterNode],
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Vec<(Task, ClusterNode)>, XpuOptimizerError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            // Implement a basic round-robin scheduling
+            Ok(tasks
+                .iter()
+                .zip(nodes.iter().cycle())
+                .map(|(t, n)| (t.clone(), n.clone()))
+                .collect())
+        })
+    }
+}
+
+struct DefaultMLOptimizer;
+impl DefaultMLOptimizer {
+    fn new() -> Self {
+        DefaultMLOptimizer
+    }
+}
+impl MachineLearningOptimizer for DefaultMLOptimizer {
+    fn optimize(
+        &self,
+        historical_data: &[TaskExecutionData],
+    ) -> Result<SchedulingStrategy, XpuOptimizerError> {
+        // Placeholder implementation
+        Ok(SchedulingStrategy::RoundRobin)
+    }
+}
+
+impl MLModel for DefaultMLOptimizer {
+    fn train(&mut self, _historical_data: &[TaskExecutionData]) {
+        // Placeholder implementation
+    }
+
+    fn predict(&self, _task_data: &HistoricalTaskData) -> TaskPrediction {
+        // Placeholder implementation
+        TaskPrediction {
+            task_id: 0,
+            estimated_duration: Duration::from_secs(1),
+            estimated_resource_usage: 100,
+            recommended_processing_unit: ProcessingUnitType::CPU,
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn MLModel> {
+        Box::new(Self::new())
+    }
+}
+
+struct DefaultCloudOffloader;
+impl DefaultCloudOffloader {
+    fn new() -> Self {
+        DefaultCloudOffloader
+    }
+}
+impl CloudOffloader for DefaultCloudOffloader {
+    fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
+        // Implement basic cloud offloading logic
+        info!("Offloading task {} to cloud", task.id);
+        Ok(())
+    }
+}
+
+struct DefaultDistributedMemoryManager {
+    total_memory: usize,
+    allocated_memory: usize,
+    memory_pool: HashMap<usize, usize>,
+}
+
+impl DefaultDistributedMemoryManager {
+    fn new(total_memory: usize) -> Self {
+        DefaultDistributedMemoryManager {
+            total_memory,
+            allocated_memory: 0,
+            memory_pool: HashMap::new(),
+        }
+    }
+}
+
+impl DistributedMemoryManager for DefaultDistributedMemoryManager {
+    fn allocate(&mut self, task_id: usize, size: usize) -> Result<(), XpuOptimizerError> {
+        if self.allocated_memory + size <= self.total_memory {
+            self.allocated_memory += size;
+            self.memory_pool.insert(task_id, size);
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::MemoryError(
+                "Not enough memory available".to_string(),
+            ))
+        }
+    }
+
+    fn deallocate(&mut self, task_id: usize) -> Result<(), XpuOptimizerError> {
+        if let Some(size) = self.memory_pool.remove(&task_id) {
+            self.allocated_memory = self.allocated_memory.saturating_sub(size);
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::MemoryError(
+                "Task not found in memory pool".to_string(),
+            ))
+        }
+    }
+
+    fn get_memory_usage(&self) -> usize {
+        self.allocated_memory
+    }
+}
+
+struct DefaultClusterManager {
+    nodes: HashMap<String, ClusterNode>,
+}
+
+impl DefaultClusterManager {
+    fn new() -> Self {
+        DefaultClusterManager {
+            nodes: HashMap::new(),
+        }
+    }
+}
+
+impl ClusterManager for DefaultClusterManager {
+    fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError> {
+        if self.nodes.contains_key(&node.id) {
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} already exists",
+                node.id
+            )))
+        } else {
+            self.nodes.insert(node.id.clone(), node);
+            Ok(())
+        }
+    }
+
+    fn remove_node(&mut self, node_id: &str) -> Result<(), XpuOptimizerError> {
+        if self.nodes.remove(node_id).is_some() {
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )))
+        }
+    }
+
+    fn get_node(&self, node_id: &str) -> Option<&ClusterNode> {
+        self.nodes.get(node_id)
+    }
+
+    fn list_nodes(&self) -> Vec<&ClusterNode> {
+        self.nodes.values().collect()
+    }
+
+    fn update_node_status(
+        &mut self,
+        node_id: &str,
+        status: NodeStatus,
+    ) -> Result<(), XpuOptimizerError> {
+        if let Some(node) = self.nodes.get_mut(node_id) {
+            node.status = status;
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::ClusterInitializationError(format!(
+                "Node with ID {} not found",
+                node_id
+            )))
+        }
+    }
+}
+
+struct DefaultScalingPolicy;
+impl DefaultScalingPolicy {
+    fn new() -> Self {
+        DefaultScalingPolicy
+    }
+}
+impl ScalingPolicy for DefaultScalingPolicy {
+    fn determine_scaling_action(
+        &self,
+        current_load: f32,
+        available_resources: usize,
+    ) -> ScalingAction {
+        if current_load > 0.8 && available_resources < 5 {
+            ScalingAction::ScaleUp(1)
+        } else if current_load < 0.2 && available_resources > 1 {
+            ScalingAction::ScaleDown(1)
+        } else {
+            ScalingAction::NoAction
+        }
+    }
+}
+
+struct DefaultLoadBalancer;
+impl DefaultLoadBalancer {
+    fn new() -> Self {
+        DefaultLoadBalancer
+    }
+}
+impl LoadBalancer for DefaultLoadBalancer {
+    fn distribute_tasks(
+        &self,
+        tasks: &[Task],
+        nodes: &[ClusterNode],
+    ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
+        let mut distribution = HashMap::new();
+        let active_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.status == NodeStatus::Active)
+            .collect();
+
+        if active_nodes.is_empty() {
+            return Err(XpuOptimizerError::TaskDistributionError(
+                "No active nodes available".to_string(),
+            ));
+        }
+
+        for (i, task) in tasks.iter().enumerate() {
+            let node = &active_nodes[i % active_nodes.len()];
+            distribution
+                .entry(node.id.clone())
+                .or_insert_with(Vec::new)
+                .push(task.clone());
+        }
+
+        Ok(distribution)
+    }
+}
+
+struct DefaultMLModel;
+impl DefaultMLModel {
+    fn new() -> Self {
+        DefaultMLModel
+    }
+}
+impl MLModel for DefaultMLModel {
+    fn train(&mut self, _historical_data: &[TaskExecutionData]) {
+        // Placeholder implementation
+    }
+
+    fn predict(&self, _task_data: &HistoricalTaskData) -> TaskPrediction {
+        // Placeholder implementation
+        TaskPrediction {
+            task_id: 0,
+            estimated_duration: Duration::from_secs(1),
+            estimated_resource_usage: 100,
+            recommended_processing_unit: ProcessingUnitType::CPU,
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn MLModel> {
+        Box::new(DefaultMLModel)
+    }
 }
 
 impl XpuOptimizer {
-    pub fn new(config: XpuOptimizerConfig) -> Self {
-        info!("Initializing XpuOptimizer with custom configuration, cloud integration, ML optimizations, power management, and cluster management");
-        let processing_units = config.processing_units.into_iter()
-            .map(|(unit_type, power)| ProcessingUnit::new(unit_type, power))
+    pub async fn new(config: XpuOptimizerConfig) -> Result<Self, XpuOptimizerError> {
+        info!("Initializing XpuOptimizer with custom configuration");
+        let processing_units = (0..config.num_processing_units)
+            .map(|_| ProcessingUnit::new(ProcessingUnitType::CPU, 1.0))
             .collect::<Vec<_>>();
-        let unit_loads = processing_units.iter().map(|unit| (unit.clone(), 0.0)).collect();
+        let unit_loads = processing_units
+            .iter()
+            .map(|unit| (unit.unit_type.clone(), 0.0))
+            .collect();
 
-        // Initialize CUDA context for GPU operations
-        let cuda_context = unsafe { cuda::Context::create_and_push(cuda::CUctx_flags::SCHED_AUTO) }.expect("Failed to create CUDA context");
+        #[cfg(feature = "cuda_support")]
+        let cuda_context = unsafe {
+            cuda::Context::create_and_push(cuda::CUctx_flags::SCHED_AUTO)
+                .map_err(|e| XpuOptimizerError::CudaInitializationError(e.to_string()))?
+        };
 
-        // Initialize TensorFlow session for AI model execution
-        let tf_session = tensorflow::Session::new(&tensorflow::SessionOptions::new()).expect("Failed to create TensorFlow session");
+        #[cfg(feature = "tensorflow_support")]
+        let tensorflow_session = tensorflow::Session::new(&tensorflow::SessionOptions::new())
+            .map_err(|e| XpuOptimizerError::TensorFlowInitializationError(e.to_string()))?;
 
-        // Initialize PyTorch for NPU operations
-        let torch_device = tch::Device::Cuda(0);
+        #[cfg(feature = "pytorch_support")]
+        let pytorch_device = tch::Device::Cuda(0);
 
-        // Initialize job scheduler client (e.g., SLURM)
-        let slurm_client = slurm_rs::Client::new().expect("Failed to create SLURM client");
+        #[cfg(feature = "kubernetes_support")]
+        let kubernetes_client = kube::Client::try_default().await.map_err(|e| {
+            warn!("Failed to initialize Kubernetes client: {}", e);
+            XpuOptimizerError::KubernetesInitializationError(e.to_string())
+        })?;
 
-        // Initialize Google Cloud client
-        let gcloud_client = google_cloud_sdk::Client::new().expect("Failed to create Google Cloud client");
-
-        // Initialize Kubernetes client
-        let k8s_client = kube::Client::try_default().expect("Failed to create Kubernetes client");
-
-        // Initialize ML model for task scheduling optimization
-        let ml_model = MLModel::new("path/to/model").expect("Failed to load ML model");
-
-        // Initialize power management components
-        let power_manager = PowerManager::new(&config.power_config);
+        let distributed_scheduler: Box<dyn DistributedScheduler> =
+            Box::new(DefaultDistributedScheduler::new());
+        let ml_optimizer: Box<dyn MachineLearningOptimizer> = Box::new(DefaultMLOptimizer::new());
+        let cloud_offloader: Box<dyn CloudOffloader> = Box::new(DefaultCloudOffloader::new());
+        let distributed_memory_manager: Box<dyn DistributedMemoryManager> = Box::new(
+            DefaultDistributedMemoryManager::new(config.memory_pool_size),
+        );
+        let power_manager: Box<dyn PowerManager> = Box::new(SimplePowerManager::new());
         let energy_monitor = EnergyMonitor::new();
+        let power_policy = PowerPolicy::default();
+        let cluster_manager: Box<dyn ClusterManager> = Box::new(DefaultClusterManager::new());
+        let scaling_policy: Box<dyn ScalingPolicy> = Box::new(DefaultScalingPolicy::new());
+        let load_balancer: Box<dyn LoadBalancer> = Box::new(DefaultLoadBalancer::new());
+        let resource_monitor = ResourceMonitor::new();
+        let ml_model: Box<dyn MLModel> = Box::new(DefaultMLModel::new());
 
-        // Initialize cluster management components
-        let cluster_manager = ClusterManager::new(&config.cluster_config);
-        let load_balancer = LoadBalancer::new(&config.load_balancer_config);
+        let scheduler = match config.scheduler_type {
+            SchedulerType::RoundRobin => {
+                Box::new(RoundRobinScheduler::new()) as Box<dyn TaskScheduler>
+            }
+            SchedulerType::LoadBalancing => {
+                Box::new(LoadBalancingScheduler::new()) as Box<dyn TaskScheduler>
+            }
+            SchedulerType::AIPredictive => {
+                Box::new(AIOptimizedScheduler::new(ml_model.clone())) as Box<dyn TaskScheduler>
+            }
+        };
 
-        XpuOptimizer {
+        let memory_manager: Box<dyn MemoryManager> = match config.memory_manager_type {
+            MemoryManagerType::Simple => {
+                Box::new(SimpleMemoryManager::new(config.memory_pool_size))
+            }
+            MemoryManagerType::Dynamic => {
+                Box::new(DynamicMemoryManager::new(4096, config.memory_pool_size))
+            }
+        };
+
+        Ok(XpuOptimizer {
             task_queue: VecDeque::new(),
             task_graph: DiGraph::new(),
             task_map: HashMap::new(),
             memory_pool: Vec::with_capacity(config.memory_pool_size),
-            latency_monitor: LatencyMonitor {
-                start_times: HashMap::new(),
-                end_times: HashMap::new(),
-            },
+            latency_monitor: Arc::new(Mutex::new(LatencyMonitor::new())),
             processing_units,
             unit_loads,
-            task_scheduler: config.task_scheduler,
-            memory_manager: config.memory_manager,
+            scheduler,
+            memory_manager,
             config,
-            cuda_context,
-            tf_session,
-            torch_device,
-            slurm_client,
-            gcloud_client,
-            k8s_client,
-            ml_model,
-            distributed_scheduler: DistributedScheduler::new(),
-            cloud_offloader: CloudOffloader::new(),
+            #[cfg(feature = "cuda_support")]
+            cuda_context: Some(cuda_context),
+            #[cfg(feature = "tensorflow_support")]
+            tensorflow_session: Some(tensorflow_session),
+            #[cfg(feature = "pytorch_support")]
+            pytorch_device: Some(pytorch_device),
+            #[cfg(feature = "kubernetes_support")]
+            kubernetes_client: Some(kubernetes_client),
             users: HashMap::new(),
             roles: HashMap::new(),
             current_user: None,
             jwt_secret: rand::thread_rng().gen::<[u8; 32]>().to_vec(),
             sessions: HashMap::new(),
+            distributed_scheduler,
+            ml_optimizer,
+            cloud_offloader,
+            distributed_memory_manager,
             power_manager,
             energy_monitor,
+            power_policy,
             cluster_manager,
+            scaling_policy,
             load_balancer,
-        }
+            resource_monitor,
+            node_pool: Vec::new(),
+            ml_model,
+            memory_strategy: MemoryStrategy::Dynamic,
+            scheduling_strategy: SchedulingStrategy::RoundRobin,
+            task_history: Vec::new(),
+            profiler: Profiler::new(),
+            scheduled_tasks: Vec::new(),
+        })
     }
 
-    pub fn run(&mut self) -> Result<(), XpuOptimizerError> {
-        info!("Running XPU optimization with cloud integration, distributed scheduling, ML optimizations, power management, and cluster management...");
+    pub async fn run(&mut self) -> Result<(), XpuOptimizerError> {
+        info!("Running XPU optimization...");
         let start_time = Instant::now();
 
-        // Initialize external libraries and cloud services
-        self.initialize_external_libraries()?;
-        self.initialize_cloud_services()?;
+        // Schedule tasks
+        self.schedule_tasks().await?;
 
-        // Connect to job scheduler and distributed task manager
-        self.connect_to_job_scheduler()?;
-        self.connect_to_distributed_task_manager()?;
-
-        // Initialize power management
-        self.initialize_power_management()?;
-
-        // Initialize cluster management
-        self.initialize_cluster_management()?;
-
-        // Create a thread pool for parallel execution
-        let pool = rayon::ThreadPoolBuilder::new().build().unwrap();
-
-        // Execute tasks in parallel with cloud offloading, power management, and cluster scaling
-        pool.install(|| {
-            rayon::scope(|s| {
-                for task in &self.task_queue {
-                    s.spawn(|_| {
-                        if self.should_offload_to_cloud(task) {
-                            if let Err(e) = self.execute_task_on_cloud(task) {
-                                error!("Error executing task {} on cloud: {:?}", task.id, e);
-                            }
-                        } else {
-                            self.adjust_power_state_for_task(task);
-                            if let Err(e) = self.execute_task_on_cluster(task) {
-                                error!("Error executing task {} on cluster: {:?}", task.id, e);
-                            }
-                            self.restore_power_state();
-                        }
-                    });
-                }
-            });
-        });
-
+        // Manage memory and optimize power consumption
         self.manage_memory()?;
-        self.manage_cluster_resources()?;
-
-        // Utilize GPU resources if available
-        self.utilize_gpu_resources()?;
-
-        // Execute AI models for task optimization
-        self.execute_ml_optimizations()?;
-
-        // Update scheduling parameters based on ML predictions
-        self.update_scheduling_parameters()?;
-
-        // Optimize power consumption based on workload history
-        self.optimize_power_consumption()?;
-
-        // Scale cluster resources based on workload
-        self.scale_cluster_resources()?;
+        self.optimize_energy_efficiency()?;
 
         let end_time = Instant::now();
         let total_duration = end_time.duration_since(start_time);
-        info!("XPU optimization completed successfully in {:?}", total_duration);
-        self.report_latencies();
-        self.report_energy_consumption();
-        self.report_cluster_utilization();
+        info!("XPU optimization completed in {:?}", total_duration);
 
-        // Disconnect from job scheduler, cloud services, and cluster
-        self.disconnect_from_job_scheduler()?;
-        self.disconnect_from_cloud_services()?;
-        self.disconnect_from_cluster()?;
+        // Report metrics
+        self.report_latencies();
+        self.report_energy_consumption()?;
+        self.report_cluster_utilization()?;
 
         Ok(())
     }
 
-    fn execute_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
+    async fn execute_task(&self, task: &Task) -> Result<Duration, XpuOptimizerError> {
         let start_time = Instant::now();
         // Simulate task execution
-        std::thread::sleep(task.execution_time);
+        tokio::time::sleep(task.execution_time).await;
         let end_time = Instant::now();
+        let duration = end_time.duration_since(start_time);
 
         // Update latency information
-        self.latency_monitor.start_times.insert(task.id, start_time);
-        self.latency_monitor.end_times.insert(task.id, end_time);
+        let mut latency_monitor = self.latency_monitor.lock().map_err(|e| {
+            XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+        })?;
 
-        Ok(())
+        // Record start and end times
+        latency_monitor.record_start(task.id, start_time)?;
+        latency_monitor.record_end(task.id, end_time)?;
+
+        // MutexGuard is automatically dropped at the end of the scope
+
+        Ok(duration)
     }
 
-    fn schedule_tasks(&mut self) -> Result<(), XpuOptimizerError> {
+    async fn schedule_tasks(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Scheduling tasks with pluggable strategy and adaptive optimization...");
         self.resolve_dependencies()?;
 
-        // Use the pluggable scheduling strategy
-        let scheduled_tasks = (self.scheduling_strategy)(&self.task_queue, &self.processing_units)?;
+        let tasks: Vec<Task> = self.task_queue.iter().cloned().collect();
+        let scheduled_tasks = self
+            .scheduler
+            .schedule(&tasks, &self.processing_units)
+            .await?;
 
-        // Execute tasks in parallel
-        let results: Vec<_> = scheduled_tasks.par_iter()
-            .map(|task| {
-                let start = Instant::now();
-                let result = self.execute_task(task);
-                let end = Instant::now();
-                self.latency_monitor.end_times.insert(task.id, end);
-                (task.id, result, end.duration_since(start))
-            })
-            .collect();
+        for (task, unit) in scheduled_tasks {
+            let start = Instant::now();
+            let duration = self.execute_task(&task).await?;
+            let end = start + duration;
 
-        // Process results and update system state for adaptive optimization
-        for (task_id, result, duration) in results {
-            match result {
-                Ok(_) => {
-                    info!("Task {} completed in {:?}", task_id, duration);
-                    self.update_task_history(task_id, duration, true);
-                },
-                Err(e) => {
-                    error!("Task {} failed: {:?}", task_id, e);
-                    self.update_task_history(task_id, duration, false);
-                },
-            }
+            self.latency_monitor
+                .lock()
+                .map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+                })?
+                .record_end(task.id, end)?;
+
+            info!(
+                "Task {} completed in {:?} on unit {:?}",
+                task.id, duration, unit.unit_type
+            );
+            self.update_task_history(task.id, duration, true);
         }
 
-        self.adapt_scheduling_parameters();
+        self.adapt_scheduling_parameters()?;
         info!("Tasks scheduled and executed with pluggable strategy and adaptive optimization");
         Ok(())
     }
 
     fn round_robin_scheduling(&mut self) -> Result<(), XpuOptimizerError> {
-        let time_slice = Duration::from_millis(self.round_robin_time_slice);
         let mut current_unit_index = 0;
 
         self.scheduled_tasks.clear();
@@ -448,9 +1020,13 @@ impl XpuOptimizer {
     fn load_balancing_scheduling(&mut self) -> Result<(), XpuOptimizerError> {
         self.scheduled_tasks.clear();
         for task in &self.task_queue {
-            let best_unit = self.processing_units.iter_mut()
+            let best_unit = self
+                .processing_units
+                .iter_mut()
                 .min_by_key(|unit| unit.current_load as u32)
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No processing units available".to_string()))?;
+                .ok_or_else(|| {
+                    XpuOptimizerError::SchedulingError("No processing units available".to_string())
+                })?;
 
             if best_unit.can_handle_task(task) {
                 best_unit.assign_task(task);
@@ -464,18 +1040,21 @@ impl XpuOptimizer {
     }
 
     fn ai_predictive_scheduling(&mut self) -> Result<(), XpuOptimizerError> {
-        // This is a placeholder for AI-driven predictive scheduling
-        // In a real implementation, this would use machine learning models to predict
-        // task execution times and optimize scheduling accordingly
+        // AI-driven predictive scheduling using machine learning models
         self.scheduled_tasks.clear();
         for task in &self.task_queue {
             let predicted_duration = self.predict_task_duration(task);
-            let best_unit = self.processing_units.iter_mut()
+            let best_unit = self
+                .processing_units
+                .iter_mut()
                 .min_by_key(|unit| {
-                    let predicted_completion_time = unit.current_load as u32 + predicted_duration;
+                    let predicted_completion_time =
+                        unit.current_load as u32 + predicted_duration.as_secs() as u32;
                     predicted_completion_time
                 })
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No processing units available".to_string()))?;
+                .ok_or_else(|| {
+                    XpuOptimizerError::SchedulingError("No processing units available".to_string())
+                })?;
 
             if best_unit.can_handle_task(task) {
                 best_unit.assign_task(task);
@@ -486,6 +1065,19 @@ impl XpuOptimizer {
         }
 
         Ok(())
+    }
+
+    fn predict_task_duration(&self, task: &Task) -> Duration {
+        // Use the ML model to predict task duration
+        let historical_data = HistoricalTaskData {
+            task_id: task.id,
+            execution_time: task.execution_time,
+            memory_usage: task.memory_requirement,
+            processing_unit: task.unit.unit_type.clone(),
+            priority: task.priority,
+        };
+        let prediction = self.ml_model.predict(&historical_data);
+        prediction.estimated_duration
     }
 
     pub fn add_task(&mut self, task: Task, token: &str) -> Result<(), XpuOptimizerError> {
@@ -515,10 +1107,14 @@ impl XpuOptimizer {
             }
         }
 
-        let position = self.task_queue.iter().position(|t| t.priority < task.priority);
+        let position = self
+            .task_queue
+            .iter()
+            .position(|t| t.priority < task.priority);
+        let cloned_task = task.clone(); // Clone the task before moving it
         match position {
-            Some(index) => self.task_queue.insert(index, task),
-            None => self.task_queue.push_back(task),
+            Some(index) => self.task_queue.insert(index, cloned_task),
+            None => self.task_queue.push_back(cloned_task),
         }
         Ok(())
     }
@@ -533,8 +1129,27 @@ impl XpuOptimizer {
             if let Some(node) = self.task_map.remove(&task_id) {
                 self.task_graph.remove_node(node);
             }
-            self.latency_monitor.start_times.remove(&task_id);
-            self.latency_monitor.end_times.remove(&task_id);
+
+            let mut latency_monitor = self.latency_monitor.lock().map_err(|e| {
+                XpuOptimizerError::LockError(format!("Failed to lock latency monitor: {}", e))
+            })?;
+
+            {
+                let mut start_times = latency_monitor.start_times.lock().map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock start_times: {}", e))
+                })?;
+                start_times.remove(&task_id);
+            }
+
+            {
+                let mut end_times = latency_monitor.end_times.lock().map_err(|e| {
+                    XpuOptimizerError::LockError(format!("Failed to lock end_times: {}", e))
+                })?;
+                end_times.remove(&task_id);
+            }
+
+            latency_monitor.remove_task(task_id)?;
+
             Ok(task)
         } else {
             Err(XpuOptimizerError::TaskNotFoundError(task_id))
@@ -548,7 +1163,9 @@ impl XpuOptimizer {
                 let mut new_queue = VecDeque::new();
                 for &node in order.iter() {
                     if let Some(task_id) = self.task_graph.node_weight(node) {
-                        if let Some(task) = self.task_queue.iter().find(|t| t.id == *task_id).cloned() {
+                        if let Some(task) =
+                            self.task_queue.iter().find(|t| t.id == *task_id).cloned()
+                        {
                             new_queue.push_back(task);
                         }
                     }
@@ -566,54 +1183,65 @@ impl XpuOptimizer {
     fn manage_memory(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Managing memory...");
         let start_time = Instant::now();
-        let mut total_memory = 0;
 
-        // Use the pluggable memory management strategy
-        match &mut self.memory_strategy {
+        let total_memory = match &self.memory_strategy {
             MemoryStrategy::Dynamic => {
-                // Dynamic memory allocation based on task requirements
-                for task in &self.task_queue {
-                    let memory_required = task.memory_requirement;
-                    if let Some(available_block) = self.memory_pool.iter_mut().find(|&mut block| *block >= memory_required) {
-                        *available_block -= memory_required;
-                        total_memory += memory_required;
-                    } else {
-                        // Allocate new memory block if no existing block is large enough
-                        let new_block_size = memory_required.max(self.min_block_size);
-                        self.memory_pool.push(new_block_size - memory_required);
-                        total_memory += memory_required;
-                    }
-                }
-            },
+                self.memory_manager
+                    .allocate(&self.task_queue, &mut self.memory_pool)?;
+                self.memory_pool.iter().sum()
+            }
             MemoryStrategy::Static(size) => {
-                // Static memory allocation
                 if self.memory_pool.is_empty() {
                     self.memory_pool.push(*size);
                 }
-                total_memory = *size;
-            },
+                *size
+            }
             MemoryStrategy::Custom(strategy) => {
-                total_memory = strategy.allocate_memory(&mut self.memory_pool, &self.task_queue)?;
-            },
-        }
+                strategy.allocate_memory(&mut self.memory_pool, &self.task_queue)?
+            }
+        };
 
         let end_time = Instant::now();
         let duration = end_time.duration_since(start_time);
-        info!("Memory allocated for tasks: {} bytes in {:?}", total_memory, duration);
+        info!(
+            "Memory allocated for tasks: {} bytes in {:?}",
+            total_memory, duration
+        );
         Ok(())
     }
 
     fn report_latencies(&self) {
-        for (task_id, start_time) in &self.latency_monitor.start_times {
-            if let Some(end_time) = self.latency_monitor.end_times.get(task_id) {
+        let latency_monitor = self
+            .latency_monitor
+            .lock()
+            .expect("Failed to lock latency monitor");
+        let start_times = latency_monitor
+            .start_times
+            .lock()
+            .expect("Failed to lock start_times");
+        let end_times = latency_monitor
+            .end_times
+            .lock()
+            .expect("Failed to lock end_times");
+
+        for (task_id, start_time) in start_times.iter() {
+            if let Some(end_time) = end_times.get(task_id) {
                 let duration = end_time.duration_since(*start_time);
-                let task = self.task_queue.iter().find(|t| t.id == *task_id).unwrap();
-                let deadline_met = duration <= task.execution_time;
-                info!("Task {} - Latency: {:?}, Deadline: {:?}, Met: {}",
-                      task_id, duration, task.execution_time, deadline_met);
-                if !deadline_met {
-                    warn!("Task {} missed its deadline by {:?}",
-                          task_id, duration - task.execution_time);
+                if let Some(task) = self.task_queue.iter().find(|t| t.id == *task_id) {
+                    let deadline_met = duration <= task.execution_time;
+                    info!(
+                        "Task {} - Latency: {:?}, Deadline: {:?}, Met: {}",
+                        task_id, duration, task.execution_time, deadline_met
+                    );
+                    if !deadline_met {
+                        warn!(
+                            "Task {} missed its deadline by {:?}",
+                            task_id,
+                            duration - task.execution_time
+                        );
+                    }
+                } else {
+                    warn!("Task {} not found in queue", task_id);
                 }
             } else {
                 warn!("Task {} has not completed yet", task_id);
@@ -621,52 +1249,91 @@ impl XpuOptimizer {
         }
     }
 
-    fn adaptive_optimization(&mut self) {
+    fn adaptive_optimization(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Performing adaptive optimization");
-        let task_history = self.get_task_execution_history();
-        let model = self.train_ml_model(task_history);
-        self.update_scheduling_parameters(model);
+        self.adapt_scheduling_parameters()?;
+        self.update_ml_model()?;
+        self.optimize_resource_allocation()?;
+        Ok(())
+    }
+
+    fn update_ml_model(&mut self) -> Result<(), XpuOptimizerError> {
+        // Update the ML model with the latest task execution data
+        self.ml_model.train(&self.task_history);
+        Ok(())
+    }
+
+    fn optimize_resource_allocation(&mut self) -> Result<(), XpuOptimizerError> {
+        // Implement resource allocation optimization logic
+        // This could involve adjusting processing unit assignments, memory allocation, etc.
+        // For now, we'll just log that it's been called
+        info!("Optimizing resource allocation based on ML model predictions");
+        Ok(())
     }
 
     fn ai_driven_predictive_scheduling(&mut self) {
         info!("Performing AI-driven predictive scheduling");
         let historical_data = self.get_historical_task_data();
-        let predictions = self.ml_model.predict(historical_data);
-        self.optimize_schedule_based_on_predictions(predictions);
+        for task_data in historical_data {
+            let prediction = self.ml_model.predict(&task_data);
+            self.optimize_schedule_based_on_predictions(prediction);
+        }
     }
 
-    fn train_ml_model(&self, task_history: Vec<TaskExecutionData>) -> Box<dyn MLModel> {
-        // Use a machine learning library to train a model based on task execution history
-        // This is a placeholder implementation
-        Box::new(SimpleRegressionModel::train(task_history))
-    }
+    // The train_ml_model method has been removed as it's no longer needed.
+    // The ml_optimizer is now responsible for training and optimizing the model.
 
-    fn update_scheduling_parameters(&mut self, model: Box<dyn MLModel>) {
-        // Update scheduling parameters based on the trained model
-        self.scheduling_strategy = SchedulingStrategy::AIOptimized(model);
+    fn update_scheduling_parameters(
+        &mut self,
+        new_strategy: SchedulingStrategy,
+    ) -> Result<(), XpuOptimizerError> {
+        // Update scheduling parameters based on the optimized strategy
+        self.scheduling_strategy = new_strategy.clone();
+        // Update the scheduler based on the new strategy
+        self.scheduler = match new_strategy {
+            SchedulingStrategy::RoundRobin => Box::new(RoundRobinScheduler),
+            SchedulingStrategy::LoadBalancing => Box::new(LoadBalancingScheduler),
+            SchedulingStrategy::AIOptimized(model) => Box::new(AIOptimizedScheduler::new(model)),
+        };
+        Ok(())
     }
 
     fn get_historical_task_data(&self) -> Vec<HistoricalTaskData> {
         // Retrieve and preprocess historical task data
-        self.task_history.iter().map(|task| task.to_historical_data()).collect()
+        self.task_history
+            .iter()
+            .map(|task| HistoricalTaskData {
+                task_id: task.id,
+                execution_time: task.execution_time,
+                memory_usage: task.memory_requirement,
+                processing_unit: task.unit.unit_type.clone(),
+                priority: task.priority,
+            })
+            .collect()
     }
 
-    fn optimize_schedule_based_on_predictions(&mut self, predictions: Vec<TaskPrediction>) {
-        for prediction in predictions {
-            if let Some(task) = self.task_queue.iter_mut().find(|t| t.id == prediction.task_id) {
-                task.estimated_duration = prediction.estimated_duration;
-                task.estimated_resource_usage = prediction.estimated_resource_usage;
-            }
+    fn optimize_schedule_based_on_predictions(&mut self, prediction: TaskPrediction) {
+        if let Some(task) = self
+            .task_queue
+            .iter_mut()
+            .find(|t| t.id == prediction.task_id)
+        {
+            task.estimated_duration = prediction.estimated_duration;
+            task.estimated_resource_usage = prediction.estimated_resource_usage;
         }
         self.reorder_task_queue_based_on_predictions();
     }
 
     fn reorder_task_queue_based_on_predictions(&mut self) {
-        self.task_queue.sort_by(|a, b| {
+        let mut sorted_tasks: Vec<_> = self.task_queue.drain(..).collect();
+        sorted_tasks.sort_by(|a, b| {
             let a_score = a.priority as f32 / a.estimated_duration.as_secs_f32();
             let b_score = b.priority as f32 / b.estimated_duration.as_secs_f32();
-            b_score.partial_cmp(&a_score).unwrap_or(std::cmp::Ordering::Equal)
+            b_score
+                .partial_cmp(&a_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
+        self.task_queue.extend(sorted_tasks);
     }
 
     fn integrate_cuda(&mut self) -> Result<(), XpuOptimizerError> {
@@ -693,10 +1360,26 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn connect_kubernetes(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement Kubernetes connection for container orchestration
-        info!("Connecting to Kubernetes cluster");
-        Ok(())
+    async fn connect_kubernetes(&mut self) -> Result<(), XpuOptimizerError> {
+        #[cfg(feature = "kubernetes_support")]
+        {
+            info!("Connecting to Kubernetes cluster");
+            match kube::Client::try_default().await {
+                Ok(client) => {
+                    self.kubernetes_client = Some(client);
+                    info!("Successfully connected to Kubernetes cluster");
+                    Ok(())
+                }
+                Err(e) => Err(XpuOptimizerError::KubernetesInitializationError(
+                    e.to_string(),
+                )),
+            }
+        }
+        #[cfg(not(feature = "kubernetes_support"))]
+        {
+            info!("Kubernetes support is not enabled");
+            Ok(())
+        }
     }
 
     fn connect_mesos(&mut self) -> Result<(), XpuOptimizerError> {
@@ -705,15 +1388,28 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn add_user(&mut self, username: String, password: String, role: UserRole) -> Result<(), XpuOptimizerError> {
+    fn add_user(
+        &mut self,
+        username: String,
+        password: String,
+        role: UserRole,
+    ) -> Result<(), XpuOptimizerError> {
         if self.users.contains_key(&username) {
             return Err(XpuOptimizerError::UserAlreadyExistsError(username));
         }
-        let salt = rand::thread_rng().gen::<[u8; 32]>();
-        let config = argon2::Config::default();
-        let hash = argon2::hash_encoded(password.as_bytes(), &salt, &config)
-            .map_err(|e| XpuOptimizerError::PasswordHashingError(e.to_string()))?;
-        self.users.insert(username, User { role, password_hash: hash });
+        let salt = SaltString::generate(&mut rand::thread_rng());
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| XpuOptimizerError::PasswordHashingError(e.to_string()))?
+            .to_string();
+        self.users.insert(
+            username,
+            User {
+                role,
+                password_hash,
+            },
+        );
         Ok(())
     }
 
@@ -722,17 +1418,29 @@ impl XpuOptimizer {
             return Err(XpuOptimizerError::UserNotFoundError(username.to_string()));
         }
         // Remove any active sessions for the removed user
-        self.sessions.retain(|_, session| session.username != username);
+        self.sessions
+            .retain(|_, session| session.user_id != username);
         Ok(())
     }
 
-    fn authenticate_user(&mut self, username: &str, password: &str) -> Result<String, XpuOptimizerError> {
-        let user = self.users.get(username).ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
-        if argon2::verify_encoded(&user.password_hash, password.as_bytes()).unwrap_or(false) {
+    fn authenticate_user(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<String, XpuOptimizerError> {
+        let user = self
+            .users
+            .get(username)
+            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+        let parsed_hash = PasswordHash::new(&user.password_hash)
+            .map_err(|_| XpuOptimizerError::AuthenticationError)?;
+        if Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             let token = self.generate_jwt_token(username, &user.role)?;
             let session = Session {
-                username: username.to_string(),
-                token: token.clone(),
+                user_id: username.to_string(),
                 expiration: Utc::now() + chrono::Duration::hours(24),
             };
             self.sessions.insert(token.clone(), session);
@@ -742,7 +1450,11 @@ impl XpuOptimizer {
         }
     }
 
-    fn generate_jwt_token(&self, username: &str, role: &str) -> Result<String, XpuOptimizerError> {
+    fn generate_jwt_token(
+        &self,
+        username: &str,
+        role: &UserRole,
+    ) -> Result<String, XpuOptimizerError> {
         let expiration = Utc::now()
             .checked_add_signed(chrono::Duration::hours(24))
             .expect("valid timestamp")
@@ -750,22 +1462,34 @@ impl XpuOptimizer {
 
         let claims = Claims {
             sub: username.to_owned(),
-            role: role.to_owned(),
+            role: role.to_string(), // Convert UserRole to String
             exp: expiration as usize,
         };
 
         let header = Header::new(Algorithm::HS256);
-        encode(&header, &claims, &EncodingKey::from_secret(self.jwt_secret.as_ref()))
-            .map_err(|_| XpuOptimizerError::TokenGenerationError)
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(self.jwt_secret.as_ref()),
+        )
+        .map_err(|_| XpuOptimizerError::TokenGenerationError)
     }
 
-    fn check_user_permission(&self, username: &str, required_permission: Permission) -> Result<(), XpuOptimizerError> {
-        let user = self.users.get(username).ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
-        if self.roles.get(&user.role).unwrap().permissions.contains(&required_permission) {
-            Ok(())
-        } else {
-            Err(XpuOptimizerError::InsufficientPermissionsError)
-        }
+    fn check_user_permission(
+        &self,
+        role: &UserRole,
+        required_permission: Permission,
+    ) -> Result<bool, XpuOptimizerError> {
+        Ok(match role {
+            UserRole::Admin => true, // Admin has all permissions
+            UserRole::Manager => !matches!(required_permission, Permission::ManageUsers),
+            UserRole::User => {
+                matches!(
+                    required_permission,
+                    Permission::ViewTasks | Permission::AddTask
+                )
+            }
+        })
     }
 
     fn validate_jwt_token(&self, token: &str) -> Result<String, XpuOptimizerError> {
@@ -778,20 +1502,34 @@ impl XpuOptimizer {
 
     fn get_user_from_token(&self, token: &str) -> Result<User, XpuOptimizerError> {
         let username = self.validate_jwt_token(token)?;
-        self.users.get(&username)
+        self.users
+            .get(&username)
             .cloned()
             .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username))
     }
 
     fn create_session(&mut self, username: &str) -> Result<String, XpuOptimizerError> {
-        let token = self.generate_jwt_token(username, &self.users.get(username).unwrap().role.name)?;
-        self.sessions.insert(token.clone(), username.to_string());
+        let user = self
+            .users
+            .get(username)
+            .ok_or(XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+        let token = self.generate_jwt_token(username, &user.role)?;
+        self.sessions.insert(
+            token.clone(),
+            Session {
+                user_id: username.to_string(),
+                expiration: Utc::now() + chrono::Duration::hours(24),
+            },
+        );
         Ok(token)
     }
 
     fn invalidate_session(&mut self, token: &str) -> Result<(), XpuOptimizerError> {
-        self.sessions.remove(token)
-            .ok_or(XpuOptimizerError::SessionNotFoundError)
+        if self.sessions.remove(token).is_some() {
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::SessionNotFoundError)
+        }
     }
 
     fn check_session(&self, token: &str) -> Result<(), XpuOptimizerError> {
@@ -802,28 +1540,45 @@ impl XpuOptimizer {
         }
     }
 
-    fn adjust_power_state(&mut self, unit: &mut ProcessingUnit) {
-        let current_load = unit.current_load;
-        let new_state = match current_load {
+    fn adjust_power_state(&mut self, unit: &mut ProcessingUnit) -> PowerState {
+        let new_state = match unit.current_load {
             load if load < 0.3 => PowerState::LowPower,
             load if load < 0.7 => PowerState::Normal,
             _ => PowerState::HighPerformance,
         };
-        unit.set_power_state(new_state);
+        unit.set_power_state(new_state.clone());
+        new_state
     }
 
     fn calculate_energy_consumption(&self) -> f32 {
-        self.processing_units.iter()
+        self.processing_units
+            .iter()
             .map(|unit| unit.energy_profile.consumption_rate * unit.current_load)
             .sum()
     }
 
-    fn optimize_energy_efficiency(&mut self) {
-        for unit in &mut self.processing_units {
-            self.adjust_power_state(unit);
+    fn optimize_energy_efficiency(&mut self) -> Result<(), XpuOptimizerError> {
+        let new_states: Vec<_> = self
+            .processing_units
+            .iter()
+            .map(|unit| self.calculate_optimal_power_state(unit))
+            .collect();
+
+        for (unit, new_state) in self.processing_units.iter_mut().zip(new_states.iter()) {
+            unit.set_power_state(new_state.clone());
         }
+
         let total_energy = self.calculate_energy_consumption();
         info!("Total energy consumption: {} W", total_energy);
+        Ok(())
+    }
+
+    fn calculate_optimal_power_state(&self, unit: &ProcessingUnit) -> PowerState {
+        match unit.current_load {
+            load if load < 0.3 => PowerState::LowPower,
+            load if load < 0.7 => PowerState::Normal,
+            _ => PowerState::HighPerformance,
+        }
     }
 
     fn initialize_cluster(&mut self) -> Result<(), XpuOptimizerError> {

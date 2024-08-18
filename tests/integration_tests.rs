@@ -1,123 +1,114 @@
-use xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, SchedulerType, MemoryManagerType, Task, ProcessingUnit, ProcessingUnitType};
 use std::time::Duration;
+use xpu_manager_rust::{
+    memory_management::MemoryManager,
+    power_management::{PowerManager, PowerState},
+    task_scheduling::{Task, TaskScheduler},
+};
 
-#[cfg(test)]
-mod integration_tests {
-    use super::*;
+#[test]
+fn test_task_scheduling_and_memory_allocation() {
+    let num_processing_units = 2;
+    let total_memory = 1000;
+    let mut scheduler = TaskScheduler::new(num_processing_units);
+    let mut memory_manager = MemoryManager::new(total_memory);
 
-    fn create_test_optimizer() -> XpuOptimizer {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        XpuOptimizer::new(config).unwrap()
-    }
-
-    fn create_test_task(id: usize) -> Task {
+    let tasks = vec![
         Task {
-            id,
-            unit: ProcessingUnit {
-                unit_type: ProcessingUnitType::CPU,
-                processing_power: 1.0,
-                current_load: 0.0,
-            },
+            id: 1,
+            priority: 2,
+            execution_time: Duration::from_secs(3),
+            memory_requirement: 200,
+        },
+        Task {
+            id: 2,
             priority: 1,
-            dependencies: vec![],
-            execution_time: Duration::from_secs(1),
-            memory_requirement: 100,
-        }
+            execution_time: Duration::from_secs(2),
+            memory_requirement: 300,
+        },
+    ];
+
+    for task in tasks {
+        scheduler.add_task(task);
     }
 
-    #[test]
-    fn test_varying_task_loads() {
-        let mut optimizer = create_test_optimizer();
+    assert_eq!(scheduler.tasks.len(), 2);
+    assert_eq!(memory_manager.get_available_memory(), 1000);
 
-        // Add tasks with varying loads
-        for i in 1..=10 {
-            let mut task = create_test_task(i);
-            task.execution_time = Duration::from_secs(i as u64);
-            task.memory_requirement = i * 50;
-            assert!(optimizer.add_task(task).is_ok());
-        }
+    memory_manager.allocate_for_tasks(&scheduler.tasks).unwrap();
 
-        assert!(optimizer.schedule_tasks().is_ok());
-        assert!(optimizer.manage_memory().is_ok());
+    assert_eq!(memory_manager.get_available_memory(), 500);
 
-        // Verify task distribution and memory allocation
-        let scheduled_tasks = optimizer.get_scheduled_tasks();
-        assert_eq!(scheduled_tasks.len(), 10);
+    scheduler.schedule();
 
-        let memory_usage = optimizer.get_memory_usage();
-        assert!(memory_usage > 0 && memory_usage <= optimizer.config.memory_pool_size);
+    assert_eq!(scheduler.tasks.len(), 0);
+}
 
-        // Check if tasks are distributed across different processing units
-        let unit_task_counts = optimizer.get_unit_task_counts();
-        assert!(unit_task_counts.values().all(|&count| count > 0));
+#[test]
+fn test_power_management() {
+    let mut power_manager = PowerManager::new();
+
+    power_manager.optimize_power(0.2);
+    assert!(matches!(
+        power_manager.get_power_state(),
+        PowerState::LowPower
+    ));
+
+    power_manager.optimize_power(0.5);
+    assert!(matches!(
+        power_manager.get_power_state(),
+        PowerState::Normal
+    ));
+
+    power_manager.optimize_power(0.8);
+    assert!(matches!(
+        power_manager.get_power_state(),
+        PowerState::HighPerformance
+    ));
+}
+
+#[test]
+fn test_integrated_system() {
+    let num_processing_units = 4;
+    let total_memory = 2000;
+    let mut scheduler = TaskScheduler::new(num_processing_units);
+    let mut memory_manager = MemoryManager::new(total_memory);
+    let mut power_manager = PowerManager::new();
+
+    let tasks = vec![
+        Task {
+            id: 1,
+            priority: 3,
+            execution_time: Duration::from_secs(5),
+            memory_requirement: 300,
+        },
+        Task {
+            id: 2,
+            priority: 1,
+            execution_time: Duration::from_secs(2),
+            memory_requirement: 200,
+        },
+        Task {
+            id: 3,
+            priority: 2,
+            execution_time: Duration::from_secs(4),
+            memory_requirement: 400,
+        },
+    ];
+
+    for task in tasks {
+        scheduler.add_task(task);
     }
 
-    #[test]
-    fn test_different_scheduling_algorithms() {
-        let config_rr = XpuOptimizerConfig {
-            scheduler_type: SchedulerType::RoundRobin,
-            ..create_test_optimizer().config
-        };
-        let mut optimizer_rr = XpuOptimizer::new(config_rr).unwrap();
+    memory_manager.allocate_for_tasks(&scheduler.tasks).unwrap();
+    assert_eq!(memory_manager.get_available_memory(), 1100);
 
-        let config_lb = XpuOptimizerConfig {
-            scheduler_type: SchedulerType::LoadBalancing,
-            ..create_test_optimizer().config
-        };
-        let mut optimizer_lb = XpuOptimizer::new(config_lb).unwrap();
+    scheduler.schedule();
+    assert_eq!(scheduler.tasks.len(), 0);
 
-        // Add same tasks to both optimizers
-        for i in 1..=5 {
-            let task = create_test_task(i);
-            assert!(optimizer_rr.add_task(task.clone()).is_ok());
-            assert!(optimizer_lb.add_task(task).is_ok());
-        }
-
-        assert!(optimizer_rr.schedule_tasks().is_ok());
-        assert!(optimizer_lb.schedule_tasks().is_ok());
-
-        // Compare scheduling results
-        let rr_distribution = optimizer_rr.get_unit_task_counts();
-        let lb_distribution = optimizer_lb.get_unit_task_counts();
-
-        // Round Robin should distribute tasks evenly
-        assert!(rr_distribution.values().all(|&count| count == 1 || count == 2));
-
-        // Load Balancing should prefer less loaded units
-        assert!(lb_distribution.values().any(|&count| count > 1));
-        assert!(lb_distribution.values().any(|&count| count == 0));
-    }
-
-    #[test]
-    fn test_memory_management_strategies() {
-        let config_simple = XpuOptimizerConfig {
-            memory_manager_type: MemoryManagerType::Simple,
-            ..create_test_optimizer().config
-        };
-        let mut optimizer_simple = XpuOptimizer::new(config_simple).unwrap();
-
-        let config_dynamic = XpuOptimizerConfig {
-            memory_manager_type: MemoryManagerType::Dynamic,
-            ..create_test_optimizer().config
-        };
-        let mut optimizer_dynamic = XpuOptimizer::new(config_dynamic).unwrap();
-
-        // Add tasks with varying memory requirements
-        for i in 1..=5 {
-            let mut task = create_test_task(i);
-            task.memory_requirement = i * 100;
-            assert!(optimizer_simple.add_task(task.clone()).is_ok());
-            assert!(optimizer_dynamic.add_task(task).is_ok());
-        }
-
-        assert!(optimizer_simple.manage_memory().is_ok());
-        assert!(optimizer_dynamic.manage_memory().is_ok());
-
-        // TODO: Add assertions to compare memory allocation results
-    }
+    let system_load = 0.6;
+    power_manager.optimize_power(system_load);
+    assert!(matches!(
+        power_manager.get_power_state(),
+        PowerState::Normal
+    ));
 }
