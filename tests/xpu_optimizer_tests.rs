@@ -1,4 +1,4 @@
-use xpu_manager_rust::{XpuOptimizer, XpuOptimizerConfig, SchedulerType, MemoryManagerType, Task, ProcessingUnit, ProcessingUnitType};
+use xpu_manager_rust::{TaskScheduler, Task, MemoryManager, PowerManager, PowerState};
 use std::time::Duration;
 
 #[cfg(test)]
@@ -7,127 +7,76 @@ mod tests {
 
     #[test]
     fn test_xpu_optimizer_creation() {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        let optimizer = XpuOptimizer::new(config);
-        assert!(optimizer.is_ok());
+        let num_processing_units = 4;
+        let total_memory = 1024;
+        let scheduler = TaskScheduler::new(num_processing_units);
+        let memory_manager = MemoryManager::new(total_memory);
+        let power_manager = PowerManager::new();
+
+        assert!(scheduler.tasks.is_empty());
+        assert_eq!(memory_manager.get_available_memory(), total_memory);
+        assert!(matches!(power_manager.get_power_state(), PowerState::Normal));
     }
 
     #[test]
     fn test_add_task() {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        let mut optimizer = XpuOptimizer::new(config).unwrap();
+        let mut scheduler = TaskScheduler::new(4);
 
         let task = Task {
             id: 1,
-            unit: ProcessingUnit {
-                unit_type: ProcessingUnitType::CPU,
-                processing_power: 1.0,
-                current_load: 0.0,
-            },
             priority: 1,
-            dependencies: vec![],
             execution_time: Duration::from_secs(1),
             memory_requirement: 100,
         };
 
-        assert!(optimizer.add_task(task).is_ok());
+        scheduler.add_task(task);
+        assert_eq!(scheduler.tasks.len(), 1);
     }
 
-    #[test]
-    fn test_remove_task() {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        let mut optimizer = XpuOptimizer::new(config).unwrap();
-
-        let task = Task {
-            id: 1,
-            unit: ProcessingUnit {
-                unit_type: ProcessingUnitType::CPU,
-                processing_power: 1.0,
-                current_load: 0.0,
-            },
-            priority: 1,
-            dependencies: vec![],
-            execution_time: Duration::from_secs(1),
-            memory_requirement: 100,
-        };
-
-        optimizer.add_task(task).unwrap();
-        let removed_task = optimizer.remove_task(1);
-        assert!(removed_task.is_ok());
-    }
+    // Test for removing a task is not applicable in the current implementation
+    // as TaskScheduler does not have a direct method for removing tasks.
+    // If task removal functionality is needed, it should be implemented
+    // in the TaskScheduler struct and then tested here.
 
     #[test]
     fn test_schedule_tasks() {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        let mut optimizer = XpuOptimizer::new(config).unwrap();
+        let num_processing_units = 4;
+        let mut scheduler = TaskScheduler::new(num_processing_units);
 
         // Add multiple tasks
         for i in 1..=5 {
             let task = Task {
                 id: i,
-                unit: ProcessingUnit {
-                    unit_type: ProcessingUnitType::CPU,
-                    processing_power: 1.0,
-                    current_load: 0.0,
-                },
                 priority: 1,
-                dependencies: vec![],
                 execution_time: Duration::from_secs(1),
                 memory_requirement: 100,
             };
-            optimizer.add_task(task).unwrap();
+            scheduler.add_task(task);
         }
 
-        assert!(optimizer.schedule_tasks().is_ok());
+        assert_eq!(scheduler.tasks.len(), 5);
+        scheduler.schedule();
+        assert!(scheduler.tasks.is_empty());
     }
 
     #[test]
     fn test_manage_memory() {
-        let config = XpuOptimizerConfig {
-            num_processing_units: 4,
-            memory_pool_size: 1024,
-            scheduler_type: SchedulerType::RoundRobin,
-            memory_manager_type: MemoryManagerType::Simple,
-        };
-        let mut optimizer = XpuOptimizer::new(config).unwrap();
+        let total_memory = 1024;
+        let mut memory_manager = MemoryManager::new(total_memory);
+        let mut task_scheduler = TaskScheduler::new(4);
 
         // Add tasks with memory requirements
         for i in 1..=5 {
             let task = Task {
                 id: i,
-                unit: ProcessingUnit {
-                    unit_type: ProcessingUnitType::CPU,
-                    processing_power: 1.0,
-                    current_load: 0.0,
-                },
                 priority: 1,
-                dependencies: vec![],
                 execution_time: Duration::from_secs(1),
                 memory_requirement: 100,
             };
-            optimizer.add_task(task).unwrap();
+            task_scheduler.add_task(task);
         }
 
-        assert!(optimizer.manage_memory().is_ok());
+        assert!(memory_manager.allocate_for_tasks(&task_scheduler.tasks).is_ok());
+        assert_eq!(memory_manager.get_available_memory(), total_memory - 5 * 100);
     }
 }
