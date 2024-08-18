@@ -1,4 +1,4 @@
-use xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, SchedulerType, MemoryManagerType, Task, ProcessingUnit, ProcessingUnitType};
+use xpu_1::{XpuOptimizer, XpuOptimizerConfig, SchedulerType, MemoryManagerType, Task, ProcessingUnit, ProcessingUnitType};
 use std::time::Duration;
 
 #[cfg(test)]
