@@ -9,6 +9,10 @@ This project provides a basic framework for managing tasks, memory, and power in
 - Task Scheduling: Prioritize and schedule tasks across multiple processing units.
 - Memory Management: Allocate and manage memory for tasks.
 - Power Management: Optimize power consumption based on system load.
+- Inspired by intel xpu devlopment benchmarks and devlopment
+
+  ![image](https://github.com/user-attachments/assets/3a636d17-d4e4-4fb8-a7b7-2ed70257ab33)
+
 
 ## Installation
 
