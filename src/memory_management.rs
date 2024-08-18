@@ -50,4 +50,11 @@ impl MemoryManager {
             Err("Not enough memory for all tasks".to_string())
         }
     }
+
+    pub fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), String> {
+        for task in completed_tasks {
+            self.deallocate(task.memory_requirement)?;
+        }
+        Ok(())
+    }
 }

@@ -40,17 +40,20 @@ impl TaskScheduler {
         self.tasks.pop_front()
     }
 
-    pub fn schedule(&mut self) {
+    pub fn schedule(&mut self) -> Vec<Task> {
         println!("Scheduling tasks...");
+        let mut completed_tasks = Vec::new();
         while let Some(task) = self.get_next_task() {
             if let Some(unit) = self.find_available_unit() {
                 println!("Executing task {} on processing unit {}", task.id, unit.id);
                 unit.current_load += task.execution_time;
+                completed_tasks.push(task);
             } else {
                 println!("No available processing unit for task {}", task.id);
                 self.tasks.push_back(task);
             }
         }
+        completed_tasks
     }
 
     fn find_available_unit(&mut self) -> Option<&mut ProcessingUnit> {

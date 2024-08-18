@@ -52,3 +52,9 @@ impl PowerManager {
         }
     }
 }
+
+impl Default for PowerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

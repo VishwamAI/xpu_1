@@ -36,7 +36,12 @@ fn main() {
     }
 
     // Schedule and execute tasks
-    scheduler.schedule();
+    let completed_tasks = scheduler.schedule();
+
+    // Deallocate memory for completed tasks
+    if let Err(e) = memory_manager.deallocate_completed_tasks(&completed_tasks) {
+        println!("Memory deallocation error: {}", e);
+    }
 
     // Simulate system load and optimize power
     let system_load = 0.6; // 60% load for demonstration
