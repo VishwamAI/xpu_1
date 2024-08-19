@@ -30,9 +30,6 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Run LPU benchmarks
-      run: cargo bench --verbose -- lpu_task
-
     - name: Lint
       run: |
         rustup component add clippy
