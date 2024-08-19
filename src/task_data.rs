@@ -49,6 +49,12 @@ impl InMemoryTaskDataManager {
     }
 }
 
+impl Default for InMemoryTaskDataManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskDataManager for InMemoryTaskDataManager {
     fn add_execution_data(&mut self, data: TaskExecutionData) {
         self.execution_data.push(data);

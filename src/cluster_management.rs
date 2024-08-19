@@ -38,15 +38,14 @@ pub enum NodeStatus {
 }
 
 // Implement a basic cluster manager
+#[derive(Default)]
 pub struct SimpleClusterManager {
     nodes: HashMap<String, ClusterNode>,
 }
 
 impl SimpleClusterManager {
     pub fn new() -> Self {
-        SimpleClusterManager {
-            nodes: HashMap::new(),
-        }
+        Self::default()
     }
 }
 
@@ -98,6 +97,7 @@ impl ClusterManager for SimpleClusterManager {
 }
 
 // Implement a basic load balancer
+#[derive(Default)]
 pub struct RoundRobinLoadBalancer;
 
 impl LoadBalancer for RoundRobinLoadBalancer {
@@ -106,7 +106,7 @@ impl LoadBalancer for RoundRobinLoadBalancer {
         tasks: &[Task],
         nodes: &[ClusterNode],
     ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
-        let mut distribution = HashMap::new();
+        let mut distribution: HashMap<String, Vec<Task>> = HashMap::new();
         let active_nodes: Vec<_> = nodes
             .iter()
             .filter(|n| n.status == NodeStatus::Active)
@@ -122,7 +122,7 @@ impl LoadBalancer for RoundRobinLoadBalancer {
             let node = &active_nodes[i % active_nodes.len()];
             distribution
                 .entry(node.id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(task.clone());
         }
 

@@ -4,6 +4,7 @@ pub trait CloudOffloader: Send + Sync {
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError>;
 }
 
+#[derive(Default)]
 pub struct DefaultCloudOffloader;
 
 impl DefaultCloudOffloader {

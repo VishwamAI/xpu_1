@@ -60,7 +60,7 @@ impl MemoryManager {
 
     pub fn deallocate(&mut self, size: usize) -> Result<(), String> {
         if let Some(blocks) = self.memory_pool.get_mut(&size) {
-            if let Some(_) = blocks.pop() {
+            if blocks.pop().is_some() {
                 self.allocated_memory = self.allocated_memory.saturating_sub(size);
                 Ok(())
             } else {

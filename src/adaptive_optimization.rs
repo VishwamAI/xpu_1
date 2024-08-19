@@ -32,3 +32,9 @@ impl AdaptiveOptimizer {
         })
     }
 }
+
+impl Default for AdaptiveOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

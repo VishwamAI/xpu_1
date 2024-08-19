@@ -13,6 +13,7 @@ pub enum ProcessingUnitType {
     LPU,
     NPU,
     FPGA,
+    VPU,
 }
 
 impl fmt::Display for ProcessingUnitType {
@@ -80,12 +81,13 @@ impl TaskScheduler {
             processing_units: (0..num_processing_units)
                 .map(|id| ProcessingUnit {
                     id,
-                    unit_type: match rng.gen_range(0..5) {
+                    unit_type: match rng.gen_range(0..6) {
                         0 => ProcessingUnitType::CPU,
                         1 => ProcessingUnitType::GPU,
                         2 => ProcessingUnitType::LPU,
                         3 => ProcessingUnitType::NPU,
-                        _ => ProcessingUnitType::FPGA,
+                        4 => ProcessingUnitType::FPGA,
+                        _ => ProcessingUnitType::VPU,
                     },
                     current_load: Duration::new(0, 0),
                     processing_power: 1.0,
@@ -142,7 +144,7 @@ impl TaskScheduler {
                     let actual_duration = task_start_time.elapsed();
                     total_latency += actual_duration;
                     self.historical_data.entry(unit.unit_type.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push((task.execution_time, actual_duration));
 
                     // Perform adaptive optimization
@@ -231,9 +233,7 @@ impl TaskScheduler {
         let average_load = total_load / self.processing_units.len() as u32;
 
         for unit in &mut self.processing_units {
-            if unit.current_load > average_load * 2 {
-                unit.current_load = average_load;
-            }
+            unit.current_load = unit.current_load.clamp(Duration::ZERO, average_load * 2);
         }
 
         self.last_load_balance = Instant::now();
@@ -276,7 +276,7 @@ impl TaskScheduler {
         for (unit_type, avg_time) in avg_execution_times.iter() {
             if let Some(unit) = self.processing_units.iter_mut().find(|u| u.unit_type == *unit_type) {
                 let adjustment_factor = 1.0 / avg_time.as_secs_f32().max(1.0);
-                unit.processing_power = (unit.processing_power * 0.9 + adjustment_factor * 0.1).max(0.1).min(2.0);
+                unit.processing_power = (unit.processing_power * 0.9 + adjustment_factor * 0.1).clamp(0.1, 2.0);
             }
         }
 
