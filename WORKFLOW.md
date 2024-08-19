@@ -145,12 +145,7 @@ To get started with the XPU Optimizer, follow these steps:
 
 3. **Install dependencies:**
     ```bash
-    pip install -r requirements.txt
-    ```
-
-4. **Run the optimizer:**
-    ```bash
-    python xpu_optimizer.py
+    cargo build
     ```
 
 ## Contributing
