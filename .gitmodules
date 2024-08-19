@@ -1,0 +1,6 @@
+[submodule "xpumanager"]
+	path = xpumanager
+	url = https://github.com/intel/xpumanager.git
+[submodule "intel-xpu-backend-for-triton"]
+	path = intel-xpu-backend-for-triton
+	url = https://github.com/intel/intel-xpu-backend-for-triton
