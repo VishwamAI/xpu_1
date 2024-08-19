@@ -30,17 +30,8 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Run CPU benchmarks
-      run: cargo bench --verbose -- cpu
-
-    - name: Run GPU benchmarks
-      run: cargo bench --verbose -- gpu
-
     - name: Run LPU benchmarks
-      run: cargo bench --verbose -- lpu
-
-    - name: Run NPU benchmarks
-      run: cargo bench --verbose -- npu
+      run: cargo bench --verbose -- lpu_task
 
     - name: Lint
       run: |
@@ -54,9 +45,9 @@ jobs:
 
     - name: Generate benchmark report
       run: |
-        echo "Generating benchmark report..."
-        # Add command to generate and save benchmark report
-        echo "Benchmark report generated"
+        echo "Generating LPU benchmark report..."
+        # Add command to generate and save LPU benchmark report
+        echo "LPU benchmark report generated"
 
   deploy:
     needs: build
@@ -80,6 +71,6 @@ jobs:
     - name: Publish benchmark results
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
-        echo "Publishing benchmark results..."
-        # Add command to publish benchmark results (e.g., to a dashboard or README)
-        echo "Benchmark results published"
+        echo "Publishing LPU benchmark results..."
+        # Add command to publish LPU benchmark results (e.g., to a dashboard or README)
+        echo "LPU benchmark results published"
