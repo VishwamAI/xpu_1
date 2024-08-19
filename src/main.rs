@@ -1,8 +1,10 @@
-use xpu_manager_rust::memory_management::MemoryManager;
-use xpu_manager_rust::power_management::{PowerManager, PowerState, EnergyProfile};
-use xpu_manager_rust::task_scheduling::{Task, TaskScheduler, ProcessingUnitType, ProcessingUnit, OptimizationMetrics};
-use xpu_manager_rust::adaptive_optimization::AdaptiveOptimizer;
 use std::time::Duration;
+use xpu_manager_rust::adaptive_optimization::AdaptiveOptimizer;
+use xpu_manager_rust::memory_management::MemoryManager;
+use xpu_manager_rust::power_management::{EnergyProfile, PowerManager, PowerState};
+use xpu_manager_rust::task_scheduling::{
+    OptimizationMetrics, ProcessingUnit, ProcessingUnitType, Task, TaskScheduler,
+};
 
 fn main() {
     println!("XPU Manager Rust Implementation with Adaptive Optimization");
@@ -119,9 +121,18 @@ fn main() {
         println!("Tasks completed: {}", completed_tasks.len());
         println!("Average task latency: {:?}", metrics.average_latency);
         println!("Current power state: {:?}", power_manager.get_power_state());
-        println!("Power consumption: {:.2} W", power_manager.get_power_consumption());
-        println!("Available memory: {} bytes", memory_manager.get_available_memory());
-        println!("Memory fragmentation: {:.2}%", memory_manager.get_fragmentation_percentage());
+        println!(
+            "Power consumption: {:.2} W",
+            power_manager.get_power_consumption()
+        );
+        println!(
+            "Available memory: {} bytes",
+            memory_manager.get_available_memory()
+        );
+        println!(
+            "Memory fragmentation: {:.2}%",
+            memory_manager.get_fragmentation_percentage()
+        );
     }
 
     println!("\nXPU optimization completed.");

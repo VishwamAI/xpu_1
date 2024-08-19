@@ -47,12 +47,14 @@ impl MLModel for SimpleRegressionModel {
     fn train(&mut self, historical_data: &[TaskExecutionData]) {
         let x: Vec<Vec<f64>> = historical_data
             .iter()
-            .map(|data| vec![
-                data.execution_time.as_secs_f64(),
-                data.memory_usage as f64,
-                self.normalize_processing_unit(&data.processing_unit),
-                data.priority as f64,
-            ])
+            .map(|data| {
+                vec![
+                    data.execution_time.as_secs_f64(),
+                    data.memory_usage as f64,
+                    self.normalize_processing_unit(&data.processing_unit),
+                    data.priority as f64,
+                ]
+            })
             .collect();
 
         let y: Vec<f64> = historical_data
@@ -68,7 +70,11 @@ impl MLModel for SimpleRegressionModel {
         for _ in 0..iterations {
             let mut gradient = vec![0.0; self.coefficients.len()];
             for (i, xi) in x.iter().enumerate() {
-                let h: f64 = xi.iter().zip(&self.coefficients).map(|(xi, ci)| xi * ci).sum();
+                let h: f64 = xi
+                    .iter()
+                    .zip(&self.coefficients)
+                    .map(|(xi, ci)| xi * ci)
+                    .sum();
                 let error = h - y[i];
                 for (j, &xij) in xi.iter().enumerate() {
                     gradient[j] += error * xij / m as f64;

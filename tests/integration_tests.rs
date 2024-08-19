@@ -1,8 +1,8 @@
 use std::time::Duration;
 use xpu_manager_rust::{
     memory_management::MemoryManager,
-    power_management::{PowerManager, PowerState, EnergyProfile},
-    task_scheduling::{Task, TaskScheduler, ProcessingUnitType, ProcessingUnit},
+    power_management::{EnergyProfile, PowerManager, PowerState},
+    task_scheduling::{ProcessingUnit, ProcessingUnitType, Task, TaskScheduler},
 };
 
 #[test]
@@ -60,7 +60,9 @@ fn test_task_scheduling_and_memory_allocation() {
     assert_eq!(scheduler.tasks.len(), 2);
     assert_eq!(memory_manager.get_available_memory(), 1000);
 
-    memory_manager.allocate_for_tasks(scheduler.tasks.make_contiguous()).unwrap();
+    memory_manager
+        .allocate_for_tasks(scheduler.tasks.make_contiguous())
+        .unwrap();
 
     assert_eq!(memory_manager.get_available_memory(), 500);
 
@@ -164,7 +166,9 @@ fn test_integrated_system() {
         scheduler.add_task(task);
     }
 
-    memory_manager.allocate_for_tasks(scheduler.tasks.make_contiguous()).unwrap();
+    memory_manager
+        .allocate_for_tasks(scheduler.tasks.make_contiguous())
+        .unwrap();
     assert_eq!(memory_manager.get_available_memory(), 1100);
 
     let _ = scheduler.schedule();

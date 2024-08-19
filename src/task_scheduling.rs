@@ -1,10 +1,10 @@
-use std::collections::{VecDeque, HashMap};
-use std::time::{Duration, Instant};
-use std::fmt;
-use rand::Rng;
-use serde::{Serialize, Deserialize};
-use crate::power_management::{PowerState, EnergyProfile};
+use crate::power_management::{EnergyProfile, PowerState};
 use crate::XpuOptimizerError;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum ProcessingUnitType {
@@ -71,8 +71,6 @@ pub struct Task {
     pub estimated_resource_usage: usize,
 }
 
-
-
 impl TaskScheduler {
     pub fn new(num_processing_units: usize) -> Self {
         let mut rng = rand::thread_rng();
@@ -119,7 +117,9 @@ impl TaskScheduler {
         Ok(completed_tasks)
     }
 
-    pub fn schedule_with_metrics(&mut self) -> Result<(Vec<Task>, OptimizationMetrics), XpuOptimizerError> {
+    pub fn schedule_with_metrics(
+        &mut self,
+    ) -> Result<(Vec<Task>, OptimizationMetrics), XpuOptimizerError> {
         println!("Scheduling tasks with adaptive optimization...");
         let mut completed_tasks = Vec::new();
         let mut unscheduled_tasks = VecDeque::new();
@@ -132,7 +132,10 @@ impl TaskScheduler {
             match self.find_optimal_unit_index(&task) {
                 Some(unit_index) => {
                     let unit = &mut self.processing_units[unit_index];
-                    println!("Executing task {} on processing unit {} ({})", task.id, unit.id, unit.unit_type);
+                    println!(
+                        "Executing task {} on processing unit {} ({})",
+                        task.id, unit.id, unit.unit_type
+                    );
                     let task_start_time = Instant::now();
                     unit.current_load += task.execution_time;
                     let mut executed_task = task.clone();
@@ -143,20 +146,21 @@ impl TaskScheduler {
                     // Update historical data
                     let actual_duration = task_start_time.elapsed();
                     total_latency += actual_duration;
-                    self.historical_data.entry(unit.unit_type.clone())
+                    self.historical_data
+                        .entry(unit.unit_type.clone())
                         .or_default()
                         .push((task.execution_time, actual_duration));
 
                     // Perform adaptive optimization
                     self.adapt_scheduling_parameters(&completed_tasks);
-                },
+                }
                 None => {
                     println!("No available processing unit for task {}", task.id);
                     unscheduled_tasks.push_back(task);
                     retry_count += 1;
                     if retry_count >= max_retries {
                         return Err(XpuOptimizerError::SchedulingError(
-                            "Max retries reached. Unable to schedule remaining tasks.".to_string()
+                            "Max retries reached. Unable to schedule remaining tasks.".to_string(),
                         ));
                     }
                 }
@@ -179,7 +183,9 @@ impl TaskScheduler {
         } else {
             Duration::new(0, 0)
         };
-        let average_load = self.processing_units.iter()
+        let average_load = self
+            .processing_units
+            .iter()
             .map(|unit| unit.current_load)
             .sum::<Duration>()
             .div_f32(self.processing_units.len() as f32);
@@ -204,16 +210,16 @@ impl TaskScheduler {
             .map(|(index, _)| index)
     }
 
-
-
     fn predict_duration(&self, task: &Task, unit_type: &ProcessingUnitType) -> Duration {
         if let Some(data) = self.historical_data.get(unit_type) {
             let sum: Duration = data.iter().map(|(_, actual)| *actual).sum();
             let count = data.len() as u32;
             if count > 0 {
                 let historical_prediction = sum / count;
-                let weighted_prediction = (historical_prediction.as_secs_f32() * self.prediction_weight
-                    + task.execution_time.as_secs_f32() * (1.0 - self.prediction_weight)) as u64;
+                let weighted_prediction = (historical_prediction.as_secs_f32()
+                    * self.prediction_weight
+                    + task.execution_time.as_secs_f32() * (1.0 - self.prediction_weight))
+                    as u64;
                 Duration::from_secs(weighted_prediction)
             } else {
                 task.execution_time
@@ -229,7 +235,11 @@ impl TaskScheduler {
         }
 
         println!("Performing load balancing...");
-        let total_load: Duration = self.processing_units.iter().map(|unit| unit.current_load).sum();
+        let total_load: Duration = self
+            .processing_units
+            .iter()
+            .map(|unit| unit.current_load)
+            .sum();
         let average_load = total_load / self.processing_units.len() as u32;
 
         for unit in &mut self.processing_units {
@@ -262,21 +272,30 @@ impl TaskScheduler {
     }
 
     fn adapt_scheduling_parameters(&mut self, completed_tasks: &[Task]) {
-        println!("Adapting scheduling parameters based on {} completed tasks", completed_tasks.len());
+        println!(
+            "Adapting scheduling parameters based on {} completed tasks",
+            completed_tasks.len()
+        );
 
         // Calculate average execution time for each processing unit type
         let mut avg_execution_times: HashMap<ProcessingUnitType, Duration> = HashMap::new();
         for task in completed_tasks {
-            avg_execution_times.entry(task.unit.unit_type.clone())
+            avg_execution_times
+                .entry(task.unit.unit_type.clone())
                 .and_modify(|time| *time += task.execution_time)
                 .or_insert(task.execution_time);
         }
 
         // Adjust processing power based on average execution times
         for (unit_type, avg_time) in avg_execution_times.iter() {
-            if let Some(unit) = self.processing_units.iter_mut().find(|u| u.unit_type == *unit_type) {
+            if let Some(unit) = self
+                .processing_units
+                .iter_mut()
+                .find(|u| u.unit_type == *unit_type)
+            {
                 let adjustment_factor = 1.0 / avg_time.as_secs_f32().max(1.0);
-                unit.processing_power = (unit.processing_power * 0.9 + adjustment_factor * 0.1).clamp(0.1, 2.0);
+                unit.processing_power =
+                    (unit.processing_power * 0.9 + adjustment_factor * 0.1).clamp(0.1, 2.0);
             }
         }
 

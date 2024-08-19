@@ -39,7 +39,10 @@ impl MemoryManager {
                 self.allocated_memory += size;
                 if *block_size > size {
                     let remaining = *block_size - size;
-                    self.memory_pool.entry(remaining).or_default().push(block + size);
+                    self.memory_pool
+                        .entry(remaining)
+                        .or_default()
+                        .push(block + size);
                 }
                 allocated = true;
                 break;
@@ -47,7 +50,10 @@ impl MemoryManager {
         }
 
         if !allocated {
-            self.memory_pool.entry(size).or_default().push(self.allocated_memory);
+            self.memory_pool
+                .entry(size)
+                .or_default()
+                .push(self.allocated_memory);
             self.allocated_memory += size;
         }
 
@@ -85,8 +91,7 @@ impl MemoryManager {
         if total_required > available_memory {
             return Err(format!(
                 "Not enough memory for all tasks. Available: {} bytes, Required: {} bytes",
-                available_memory,
-                total_required
+                available_memory, total_required
             ));
         }
 

@@ -1,5 +1,8 @@
 use std::time::Duration;
-use xpu_manager_rust::{MemoryManager, PowerManager, PowerState, Task, TaskScheduler, ProcessingUnitType, ProcessingUnit, EnergyProfile};
+use xpu_manager_rust::{
+    EnergyProfile, MemoryManager, PowerManager, PowerState, ProcessingUnit, ProcessingUnitType,
+    Task, TaskScheduler,
+};
 
 #[cfg(test)]
 mod tests {
@@ -78,7 +81,7 @@ mod tests {
                     energy_profile: EnergyProfile::default(),
                 },
                 estimated_duration: Duration::from_secs(2), // Added estimated duration
-                estimated_resource_usage: 120, // Added estimated resource usage
+                estimated_resource_usage: 120,              // Added estimated resource usage
             };
             scheduler.add_task(task);
         }

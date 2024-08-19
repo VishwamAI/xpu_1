@@ -1,8 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::time::Duration;
 use xpu_manager_rust::{
-    memory_management::MemoryManager, power_management::{PowerManager, PowerState, EnergyProfile},
-    task_scheduling::{Task, TaskScheduler, ProcessingUnitType, ProcessingUnit}
+    memory_management::MemoryManager,
+    power_management::{EnergyProfile, PowerManager, PowerState},
+    task_scheduling::{ProcessingUnit, ProcessingUnitType, Task, TaskScheduler},
 };
 
 fn create_test_scheduler() -> TaskScheduler {
@@ -36,10 +37,7 @@ fn benchmark_add_task(c: &mut Criterion) {
     let mut scheduler = create_test_scheduler();
     c.bench_function("add task", |b| {
         b.iter(|| {
-            let task = create_test_task(
-                black_box(1),
-                black_box(ProcessingUnitType::CPU),
-            );
+            let task = create_test_task(black_box(1), black_box(ProcessingUnitType::CPU));
             scheduler.add_task(black_box(task));
         })
     });
@@ -59,15 +57,18 @@ fn benchmark_schedule_tasks(c: &mut Criterion) {
 }
 
 fn benchmark_manage_memory(c: &mut Criterion) {
-    let mut memory_manager = MemoryManager::new(1048576);  // 1 MB
+    let mut memory_manager = MemoryManager::new(1048576); // 1 MB
     let mut scheduler = create_test_scheduler();
-    for i in 1..=20 {  // Reduced number of tasks
+    for i in 1..=20 {
+        // Reduced number of tasks
         let task = create_test_task(i, ProcessingUnitType::CPU);
         scheduler.add_task(task);
     }
     c.bench_function("manage memory", |b| {
         b.iter(|| {
-            memory_manager.allocate_for_tasks(scheduler.tasks.make_contiguous()).unwrap();
+            memory_manager
+                .allocate_for_tasks(scheduler.tasks.make_contiguous())
+                .unwrap();
         })
     });
 }
