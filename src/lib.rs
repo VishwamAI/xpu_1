@@ -10,6 +10,14 @@ pub mod resource_monitoring;
 pub mod scaling;
 pub mod task_data;
 pub mod task_scheduling;
+pub mod cli;
+pub mod cpu;
+pub mod gpu;
+pub mod tpu;
+pub mod npu;
+pub mod lpu;
+pub mod vpu;
+pub mod fpga;
 
 pub use adaptive_optimization::AdaptiveOptimizer;
 pub use cloud_offloading::CloudOffloader;
@@ -45,4 +53,6 @@ pub enum XpuOptimizerError {
     ResourceAllocationError(String),
     #[error("Optimization error: {0}")]
     OptimizationError(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
 }
