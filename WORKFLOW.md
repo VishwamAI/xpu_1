@@ -143,7 +143,7 @@ To get started with the XPU Optimizer, follow these steps:
     cd xpu-optimizer
     ```
 
-3. **Install dependencies:**
+3. **Build the project:**
     ```bash
     cargo build
     ```
