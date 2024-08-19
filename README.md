@@ -1,5 +1,5 @@
 # XPU Manager Rust
-
+[![XPU CI/CD Pipeline](https://github.com/VishwamAI/xpu_1/actions/workflows/xpu.yaml/badge.svg)](https://github.com/VishwamAI/xpu_1/actions/workflows/xpu.yaml)
 XPU Manager Rust is a Rust implementation of a task scheduler, memory manager, and power manager for XPU (Accelerated Processing Units) systems.
 
 ## Project Overview
