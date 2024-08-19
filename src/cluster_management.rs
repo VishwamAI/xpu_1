@@ -1,5 +1,4 @@
 use crate::{ProcessingUnit, Task, XpuOptimizerError};
-use crate::power_management::{PowerState, EnergyProfile};
 use std::collections::HashMap;
 
 pub trait ClusterManager: Send + Sync {
@@ -134,7 +133,6 @@ impl LoadBalancer for RoundRobinLoadBalancer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task_scheduling::ProcessingUnitType;
 
     fn create_test_node(id: &str) -> ClusterNode {
         ClusterNode {
