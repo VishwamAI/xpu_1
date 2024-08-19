@@ -49,3 +49,9 @@ impl ResourceMonitor {
         self.last_update
     }
 }
+
+impl Default for ResourceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

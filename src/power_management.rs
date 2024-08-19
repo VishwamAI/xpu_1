@@ -1,13 +1,28 @@
+use serde::{Deserialize, Serialize};
+
 pub struct PowerManager {
     current_power_state: PowerState,
     power_consumption: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PowerState {
     LowPower,
     Normal,
     HighPerformance,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EnergyProfile {
+    pub consumption_rate: f32,
+}
+
+impl Default for EnergyProfile {
+    fn default() -> Self {
+        EnergyProfile {
+            consumption_rate: 1.0, // Default consumption rate
+        }
+    }
 }
 
 impl PowerManager {

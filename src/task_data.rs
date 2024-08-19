@@ -49,6 +49,12 @@ impl InMemoryTaskDataManager {
     }
 }
 
+impl Default for InMemoryTaskDataManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskDataManager for InMemoryTaskDataManager {
     fn add_execution_data(&mut self, data: TaskExecutionData) {
         self.execution_data.push(data);
@@ -69,7 +75,8 @@ impl TaskDataManager for InMemoryTaskDataManager {
 
     fn clear_old_data(&mut self, threshold: Duration) {
         let now = std::time::Instant::now();
-        self.execution_data
-            .retain(|data| now.duration_since(std::time::Instant::now()) < threshold);
+        self.execution_data.retain(|data| {
+            now.duration_since(std::time::Instant::now() - data.execution_time) < threshold
+        });
     }
 }

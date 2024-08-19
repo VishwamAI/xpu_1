@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+#[derive(Default)]
 pub struct Profiler {
     task_timings: HashMap<usize, Duration>,
     unit_utilization: HashMap<usize, f32>,
@@ -9,14 +10,10 @@ pub struct Profiler {
 
 impl Profiler {
     pub fn new() -> Self {
-        Profiler {
-            task_timings: HashMap::new(),
-            unit_utilization: HashMap::new(),
-            memory_usage: Vec::new(),
-        }
+        Self::default()
     }
 
-    pub fn start_task(&mut self, task_id: usize) -> Instant {
+    pub fn start_task(&mut self) -> Instant {
         Instant::now()
     }
 
