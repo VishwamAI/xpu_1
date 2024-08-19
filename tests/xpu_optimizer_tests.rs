@@ -1,5 +1,5 @@
 use std::time::Duration;
-use xpu_manager_rust::{MemoryManager, PowerManager, PowerState, Task, TaskScheduler};
+use xpu_manager_rust::{MemoryManager, PowerManager, PowerState, Task, TaskScheduler, ProcessingUnitType, ProcessingUnit, EnergyProfile};
 
 #[cfg(test)]
 mod tests {
@@ -30,6 +30,19 @@ mod tests {
             priority: 1,
             execution_time: Duration::from_secs(1),
             memory_requirement: 100,
+            unit_type: ProcessingUnitType::CPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 0,
+                unit_type: ProcessingUnitType::CPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(2),
+            estimated_resource_usage: 120,
         };
 
         scheduler.add_task(task);
@@ -53,12 +66,25 @@ mod tests {
                 priority: 1,
                 execution_time: Duration::from_secs(1),
                 memory_requirement: 100,
+                unit_type: ProcessingUnitType::CPU,
+                dependencies: vec![],
+                secure: false,
+                unit: ProcessingUnit {
+                    id: i - 1,
+                    unit_type: ProcessingUnitType::CPU,
+                    current_load: Duration::new(0, 0),
+                    processing_power: 1.0,
+                    power_state: PowerState::Normal,
+                    energy_profile: EnergyProfile::default(),
+                },
+                estimated_duration: Duration::from_secs(2), // Added estimated duration
+                estimated_resource_usage: 120, // Added estimated resource usage
             };
             scheduler.add_task(task);
         }
 
         assert_eq!(scheduler.tasks.len(), 5);
-        scheduler.schedule();
+        let _ = scheduler.schedule();
         assert!(scheduler.tasks.is_empty());
     }
 
@@ -75,12 +101,25 @@ mod tests {
                 priority: 1,
                 execution_time: Duration::from_secs(1),
                 memory_requirement: 100,
+                unit_type: ProcessingUnitType::CPU,
+                dependencies: vec![],
+                secure: false,
+                unit: ProcessingUnit {
+                    id: i - 1,
+                    unit_type: ProcessingUnitType::CPU,
+                    current_load: Duration::new(0, 0),
+                    processing_power: 1.0,
+                    power_state: PowerState::Normal,
+                    energy_profile: EnergyProfile::default(),
+                },
+                estimated_duration: Duration::from_secs(2),
+                estimated_resource_usage: 120,
             };
             task_scheduler.add_task(task);
         }
 
         assert!(memory_manager
-            .allocate_for_tasks(&task_scheduler.tasks)
+            .allocate_for_tasks(task_scheduler.tasks.make_contiguous())
             .is_ok());
         assert_eq!(
             memory_manager.get_available_memory(),
