@@ -86,13 +86,17 @@ To run the benchmarks locally:
 cargo bench
 ```
 
+## Performance Benchmarks
+
 Recent benchmark results:
 
-- CPU: 10.611 µs ±22.1% (task scheduling)
-- GPU: 15.234 µs ±18.7% (parallel task execution)
-- TPU: 8.756 µs ±15.3% (tensor operations)
-- NPU: 12.089 µs ±20.5% (neural network inference)
-- LPU: 7.123 µs ±12.8% (linear processing for LLMs)
+| Processor | Task                                 | Time (µs) | Variation |
+|-----------|--------------------------------------|-----------|-----------|
+| CPU       | Task Scheduling                      | 10.611    | ±22.1%    |
+| GPU       | Parallel Task Execution              | 15.234    | ±18.7%    |
+| TPU       | Tensor Operations                    | 8.756     | ±15.3%    |
+| NPU       | Neural Network Inference             | 12.089    | ±20.5%    |
+| LPU       | Linear Processing for LLMs           | 7.123     | ±12.8%    |
 
 Note: These results are from a standard development environment and may vary based on hardware configurations.
 
