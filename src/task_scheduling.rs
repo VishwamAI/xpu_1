@@ -1,6 +1,14 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum ProcessingUnitType {
+    CPU,
+    GPU,
+    LPU,
+    NPU,
+}
+
 pub struct TaskScheduler {
     pub tasks: VecDeque<Task>,
     processing_units: Vec<ProcessingUnit>,
@@ -11,6 +19,7 @@ pub struct Task {
     pub priority: u8,
     pub execution_time: Duration,
     pub memory_requirement: usize,
+    pub unit_type: ProcessingUnitType,
 }
 
 pub struct ProcessingUnit {
