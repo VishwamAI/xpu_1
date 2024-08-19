@@ -80,3 +80,66 @@ impl TaskDataManager for InMemoryTaskDataManager {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn create_test_task_execution_data(id: usize) -> TaskExecutionData {
+        TaskExecutionData {
+            id,
+            execution_time: Duration::from_secs(1),
+            memory_usage: 1024,
+            processing_unit: ProcessingUnitType::CPU,
+            priority: 1,
+            success: true,
+            memory_requirement: 2048,
+            unit: ProcessingUnit {
+                id: 0,
+                unit_type: ProcessingUnitType::CPU,
+                current_load: Duration::from_secs(0),
+                processing_power: 1.0,
+                power_state: crate::PowerState::Normal,
+                energy_profile: crate::EnergyProfile::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_add_execution_data() {
+        let mut manager = InMemoryTaskDataManager::new();
+        let data = create_test_task_execution_data(1);
+        manager.add_execution_data(data.clone());
+        assert_eq!(manager.execution_data.len(), 1);
+        assert_eq!(manager.execution_data[0].id, data.id);
+    }
+
+    #[test]
+    fn test_get_historical_data() {
+        let mut manager = InMemoryTaskDataManager::new();
+        manager.add_execution_data(create_test_task_execution_data(1));
+        manager.add_execution_data(create_test_task_execution_data(2));
+        let historical_data = manager.get_historical_data();
+        assert_eq!(historical_data.len(), 2);
+        assert_eq!(historical_data[0].task_id, 1);
+        assert_eq!(historical_data[1].task_id, 2);
+    }
+
+    #[test]
+    fn test_clear_old_data() {
+        let mut manager = InMemoryTaskDataManager::new();
+        let old_data = TaskExecutionData {
+            execution_time: Duration::from_secs(10),
+            ..create_test_task_execution_data(1)
+        };
+        let new_data = create_test_task_execution_data(2);
+        manager.add_execution_data(old_data);
+        manager.add_execution_data(new_data);
+
+        // Clear data older than 5 seconds
+        manager.clear_old_data(Duration::from_secs(5));
+        assert_eq!(manager.execution_data.len(), 1);
+        assert_eq!(manager.execution_data[0].id, 2);
+    }
+}

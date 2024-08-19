@@ -55,3 +55,55 @@ impl Default for ResourceMonitor {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_update_and_get_cpu_usage() {
+        let mut monitor = ResourceMonitor::new();
+        monitor.update_cpu_usage("node1", 0.75);
+        assert_eq!(monitor.get_cpu_usage("node1"), Some(0.75));
+        assert_eq!(monitor.get_cpu_usage("node2"), None);
+    }
+
+    #[test]
+    fn test_update_and_get_memory_usage() {
+        let mut monitor = ResourceMonitor::new();
+        monitor.update_memory_usage("node1", 1024);
+        assert_eq!(monitor.get_memory_usage("node1"), Some(1024));
+        assert_eq!(monitor.get_memory_usage("node2"), None);
+    }
+
+    #[test]
+    fn test_update_and_get_gpu_usage() {
+        let mut monitor = ResourceMonitor::new();
+        monitor.update_gpu_usage("node1", 0.9);
+        assert_eq!(monitor.get_gpu_usage("node1"), Some(0.9));
+        assert_eq!(monitor.get_gpu_usage("node2"), None);
+    }
+
+    #[test]
+    fn test_last_update_time() {
+        let mut monitor = ResourceMonitor::new();
+        let initial_time = monitor.last_update_time();
+        thread::sleep(Duration::from_millis(10));
+        monitor.update_cpu_usage("node1", 0.5);
+        assert!(monitor.last_update_time() > initial_time);
+    }
+
+    #[test]
+    fn test_multiple_updates() {
+        let mut monitor = ResourceMonitor::new();
+        monitor.update_cpu_usage("node1", 0.5);
+        monitor.update_memory_usage("node1", 2048);
+        monitor.update_gpu_usage("node1", 0.8);
+
+        assert_eq!(monitor.get_cpu_usage("node1"), Some(0.5));
+        assert_eq!(monitor.get_memory_usage("node1"), Some(2048));
+        assert_eq!(monitor.get_gpu_usage("node1"), Some(0.8));
+    }
+}

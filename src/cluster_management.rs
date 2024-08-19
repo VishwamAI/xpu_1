@@ -1,4 +1,5 @@
 use crate::{ProcessingUnit, Task, XpuOptimizerError};
+use crate::power_management::{PowerState, EnergyProfile};
 use std::collections::HashMap;
 
 pub trait ClusterManager: Send + Sync {
@@ -127,5 +128,72 @@ impl LoadBalancer for RoundRobinLoadBalancer {
         }
 
         Ok(distribution)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task_scheduling::ProcessingUnitType;
+
+    fn create_test_node(id: &str) -> ClusterNode {
+        ClusterNode {
+            id: id.to_string(),
+            ip_address: format!("192.168.1.{}", id),
+            processing_units: vec![ProcessingUnit {
+                id: 0,
+                unit_type: ProcessingUnitType::CPU,
+                current_load: std::time::Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            }],
+            status: NodeStatus::Active,
+            current_load: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_simple_cluster_manager() {
+        let mut manager = SimpleClusterManager::new();
+
+        // Test add_node
+        let node1 = create_test_node("1");
+        assert!(manager.add_node(node1.clone()).is_ok());
+        assert!(manager.add_node(node1.clone()).is_err());
+
+        // Test get_node
+        assert!(manager.get_node("1").is_some());
+        assert!(manager.get_node("2").is_none());
+
+        // Test update_node_status
+        assert!(manager.update_node_status("1", NodeStatus::Maintenance).is_ok());
+        assert_eq!(manager.get_node("1").unwrap().status, NodeStatus::Maintenance);
+
+        // Test remove_node
+        assert!(manager.remove_node("1").is_ok());
+        assert!(manager.remove_node("1").is_err());
+    }
+
+    #[test]
+    fn test_round_robin_load_balancer() {
+        let balancer = RoundRobinLoadBalancer;
+        let nodes = vec![
+            create_test_node("1"),
+            create_test_node("2"),
+            create_test_node("3"),
+        ];
+        let tasks = vec![
+            Task { id: 1, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 2, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 3, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 4, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
+        ];
+
+        let distribution = balancer.distribute_tasks(&tasks, &nodes).unwrap();
+        assert_eq!(distribution.len(), 3);
+        assert_eq!(distribution.get("1").unwrap().len(), 2);
+        assert_eq!(distribution.get("2").unwrap().len(), 1);
+        assert_eq!(distribution.get("3").unwrap().len(), 1);
     }
 }
