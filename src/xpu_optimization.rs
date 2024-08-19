@@ -49,6 +49,15 @@ use crate::task_scheduling::{
     SchedulingStrategy, TaskScheduler,
 };
 
+// Processing unit modules
+use crate::cpu::core::CPU;
+use crate::gpu::core::GPU;
+use crate::tpu::core::TPU;
+use crate::npu::core::NPU;
+use crate::lpu::core::LPU;
+use crate::vpu::core::VPU;
+use crate::fpga::core::FPGACore;
+
 pub trait MachineLearningOptimizer: Send + Sync {
     fn optimize(
         &self,
@@ -812,13 +821,33 @@ impl MLModel for DefaultMLModel {
 impl XpuOptimizer {
     pub async fn new(config: XpuOptimizerConfig) -> Result<Self, XpuOptimizerError> {
         info!("Initializing XpuOptimizer with custom configuration");
-        let processing_units = (0..config.num_processing_units)
-            .map(|_| ProcessingUnit::new(ProcessingUnitType::CPU, 1.0))
-            .collect::<Vec<_>>();
-        let unit_loads = processing_units
-            .iter()
-            .map(|unit| (unit.unit_type.clone(), 0.0))
-            .collect();
+        let mut processing_units = Vec::new();
+        let mut unit_loads = HashMap::new();
+
+        // Initialize all processing unit types
+        for i in 0..config.num_processing_units {
+            let unit_type = match i % 7 {
+                0 => ProcessingUnitType::CPU,
+                1 => ProcessingUnitType::GPU,
+                2 => ProcessingUnitType::TPU,
+                3 => ProcessingUnitType::NPU,
+                4 => ProcessingUnitType::LPU,
+                5 => ProcessingUnitType::VPU,
+                6 => ProcessingUnitType::FPGA,
+                _ => unreachable!(),
+            };
+            let unit = match unit_type {
+                ProcessingUnitType::CPU => Box::new(CPU::new(i, 1.0)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::GPU => Box::new(GPU::new(i, 1.0)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::TPU => Box::new(TPU::new(i, 1.0)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::NPU => Box::new(NPU::new(i)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::LPU => Box::new(LPU::new(i, 1.0)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::VPU => Box::new(VPU::new(i)) as Box<dyn ProcessingUnit>,
+                ProcessingUnitType::FPGA => Box::new(FPGACore::new(i, 1.0)) as Box<dyn ProcessingUnit>,
+            };
+            processing_units.push(unit);
+            unit_loads.insert(unit_type, 0.0);
+        }
 
         #[cfg(feature = "cuda_support")]
         let cuda_context = unsafe {
@@ -925,12 +954,15 @@ impl XpuOptimizer {
         info!("Running XPU optimization...");
         let start_time = Instant::now();
 
-        // Schedule tasks
+        // Schedule tasks for all processing unit types
         self.schedule_tasks().await?;
 
-        // Manage memory and optimize power consumption
+        // Manage memory and optimize power consumption for all units
         self.manage_memory()?;
         self.optimize_energy_efficiency()?;
+
+        // Execute tasks on respective processing units
+        self.execute_tasks().await?;
 
         let end_time = Instant::now();
         let total_duration = end_time.duration_since(start_time);
@@ -940,6 +972,7 @@ impl XpuOptimizer {
         self.report_latencies();
         self.report_energy_consumption()?;
         self.report_cluster_utilization()?;
+        self.report_processing_unit_utilization()?;
 
         Ok(())
     }
@@ -977,7 +1010,15 @@ impl XpuOptimizer {
 
         for (task, unit) in scheduled_tasks {
             let start = Instant::now();
-            let duration = self.execute_task(&task).await?;
+            let duration = match unit.unit_type {
+                ProcessingUnitType::CPU => self.cpu.execute_task(&task),
+                ProcessingUnitType::GPU => self.gpu.execute_task(&task),
+                ProcessingUnitType::TPU => self.tpu.process_task(&task)?,
+                ProcessingUnitType::NPU => self.npu.process_task(&task)?,
+                ProcessingUnitType::LPU => self.lpu.process_task(&task)?,
+                ProcessingUnitType::VPU => self.vpu.process_task(&task)?,
+                ProcessingUnitType::FPGA => self.fpga.execute_task(&task)?,
+            };
             let end = start + duration;
 
             self.latency_monitor
@@ -995,6 +1036,7 @@ impl XpuOptimizer {
         }
 
         self.adapt_scheduling_parameters()?;
+        self.optimize_energy_efficiency()?;
         info!("Tasks scheduled and executed with pluggable strategy and adaptive optimization");
         Ok(())
     }
