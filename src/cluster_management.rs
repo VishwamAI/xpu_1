@@ -1,4 +1,4 @@
-use crate::{ProcessingUnit, Task, XpuOptimizerError};
+use crate::{ProcessingUnit, Task, XpuOptimizerError, PowerState, EnergyProfile, ProcessingUnitType};
 use std::collections::HashMap;
 
 pub trait ClusterManager: Send + Sync {
