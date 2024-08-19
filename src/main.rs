@@ -2,7 +2,6 @@ use xpu_manager_rust::memory_management::MemoryManager;
 use xpu_manager_rust::power_management::{PowerManager, PowerState, EnergyProfile};
 use xpu_manager_rust::task_scheduling::{Task, TaskScheduler, ProcessingUnitType, ProcessingUnit, OptimizationMetrics};
 use xpu_manager_rust::adaptive_optimization::AdaptiveOptimizer;
-use xpu_manager_rust::XpuOptimizerError;
 use std::time::Duration;
 
 fn main() {
@@ -22,7 +21,7 @@ fn main() {
             id: 1,
             priority: 2,
             execution_time: Duration::from_secs(5),
-            memory_requirement: 2 * 1024 * 1024, // 2 MB
+            memory_requirement: 2_097_152, // 2 MB
             unit_type: ProcessingUnitType::CPU,
             dependencies: vec![],
             secure: false,
@@ -41,7 +40,7 @@ fn main() {
             id: 2,
             priority: 1,
             execution_time: Duration::from_secs(3),
-            memory_requirement: 1 * 1024 * 1024, // 1 MB
+            memory_requirement: 1_048_576, // 1 MB
             unit_type: ProcessingUnitType::GPU,
             dependencies: vec![],
             secure: false,
@@ -60,7 +59,7 @@ fn main() {
             id: 3,
             priority: 3,
             execution_time: Duration::from_secs(7),
-            memory_requirement: 3 * 1024 * 1024, // 3 MB
+            memory_requirement: 3_145_728, // 3 MB
             unit_type: ProcessingUnitType::NPU,
             dependencies: vec![],
             secure: false,
