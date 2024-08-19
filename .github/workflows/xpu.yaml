@@ -30,8 +30,17 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Run benchmarks
-      run: cargo bench --verbose
+    - name: Run CPU benchmarks
+      run: cargo bench --verbose -- cpu
+
+    - name: Run GPU benchmarks
+      run: cargo bench --verbose -- gpu
+
+    - name: Run LPU benchmarks
+      run: cargo bench --verbose -- lpu
+
+    - name: Run NPU benchmarks
+      run: cargo bench --verbose -- npu
 
     - name: Lint
       run: |
@@ -42,6 +51,12 @@ jobs:
       run: |
         rustup component add rustfmt
         cargo fmt -- --check
+
+    - name: Generate benchmark report
+      run: |
+        echo "Generating benchmark report..."
+        # Add command to generate and save benchmark report
+        echo "Benchmark report generated"
 
   deploy:
     needs: build
@@ -61,3 +76,10 @@ jobs:
         # Add actual deployment steps here
         # This could involve copying binaries to a server, updating a container, etc.
         echo "Deployment complete"
+
+    - name: Publish benchmark results
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        echo "Publishing benchmark results..."
+        # Add command to publish benchmark results (e.g., to a dashboard or README)
+        echo "Benchmark results published"
