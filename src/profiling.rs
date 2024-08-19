@@ -16,7 +16,7 @@ impl Profiler {
         }
     }
 
-    pub fn start_task(&mut self, task_id: usize) -> Instant {
+    pub fn start_task(&mut self) -> Instant {
         Instant::now()
     }
 

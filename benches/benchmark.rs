@@ -40,9 +40,9 @@ fn benchmark_schedule_tasks(c: &mut Criterion) {
 }
 
 fn benchmark_manage_memory(c: &mut Criterion) {
-    let mut memory_manager = MemoryManager::new(32768);  // Updated to 32768 bytes
+    let mut memory_manager = MemoryManager::new(10485760);  // Updated to 10485760 bytes (10 MB)
     let mut scheduler = create_test_scheduler();
-    for i in 1..=10 {
+    for i in 1..=100 {  // Increased number of tasks
         let task = create_test_task(i, ProcessingUnitType::CPU);
         scheduler.add_task(task);
     }

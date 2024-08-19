@@ -1,8 +1,8 @@
 use std::time::Duration;
 use xpu_manager_rust::{
     memory_management::MemoryManager,
-    power_management::{PowerManager, PowerState},
-    task_scheduling::{Task, TaskScheduler},
+    power_management::{PowerManager, PowerState, EnergyProfile},
+    task_scheduling::{Task, TaskScheduler, ProcessingUnitType, ProcessingUnit},
 };
 
 #[test]
@@ -18,12 +18,38 @@ fn test_task_scheduling_and_memory_allocation() {
             priority: 2,
             execution_time: Duration::from_secs(3),
             memory_requirement: 200,
+            unit_type: ProcessingUnitType::CPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 0,
+                unit_type: ProcessingUnitType::CPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(4), // Estimated duration slightly higher than execution time
+            estimated_resource_usage: 220, // Estimated resource usage slightly higher than memory requirement
         },
         Task {
             id: 2,
             priority: 1,
             execution_time: Duration::from_secs(2),
             memory_requirement: 300,
+            unit_type: ProcessingUnitType::GPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 1,
+                unit_type: ProcessingUnitType::GPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(3), // Estimated duration slightly higher than execution time
+            estimated_resource_usage: 330, // Estimated resource usage slightly higher than memory requirement
         },
     ];
 
@@ -34,11 +60,11 @@ fn test_task_scheduling_and_memory_allocation() {
     assert_eq!(scheduler.tasks.len(), 2);
     assert_eq!(memory_manager.get_available_memory(), 1000);
 
-    memory_manager.allocate_for_tasks(&scheduler.tasks).unwrap();
+    memory_manager.allocate_for_tasks(scheduler.tasks.make_contiguous()).unwrap();
 
     assert_eq!(memory_manager.get_available_memory(), 500);
 
-    scheduler.schedule();
+    let _ = scheduler.schedule();
 
     assert_eq!(scheduler.tasks.len(), 0);
 }
@@ -80,18 +106,57 @@ fn test_integrated_system() {
             priority: 3,
             execution_time: Duration::from_secs(5),
             memory_requirement: 300,
+            unit_type: ProcessingUnitType::CPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 0,
+                unit_type: ProcessingUnitType::CPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(6),
+            estimated_resource_usage: 320,
         },
         Task {
             id: 2,
             priority: 1,
             execution_time: Duration::from_secs(2),
             memory_requirement: 200,
+            unit_type: ProcessingUnitType::GPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 1,
+                unit_type: ProcessingUnitType::GPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(3),
+            estimated_resource_usage: 220,
         },
         Task {
             id: 3,
             priority: 2,
             execution_time: Duration::from_secs(4),
             memory_requirement: 400,
+            unit_type: ProcessingUnitType::NPU,
+            dependencies: vec![],
+            secure: false,
+            unit: ProcessingUnit {
+                id: 2,
+                unit_type: ProcessingUnitType::NPU,
+                current_load: Duration::new(0, 0),
+                processing_power: 1.0,
+                power_state: PowerState::Normal,
+                energy_profile: EnergyProfile::default(),
+            },
+            estimated_duration: Duration::from_secs(5),
+            estimated_resource_usage: 420,
         },
     ];
 
@@ -99,10 +164,10 @@ fn test_integrated_system() {
         scheduler.add_task(task);
     }
 
-    memory_manager.allocate_for_tasks(&scheduler.tasks).unwrap();
+    memory_manager.allocate_for_tasks(scheduler.tasks.make_contiguous()).unwrap();
     assert_eq!(memory_manager.get_available_memory(), 1100);
 
-    scheduler.schedule();
+    let _ = scheduler.schedule();
     assert_eq!(scheduler.tasks.len(), 0);
 
     let system_load = 0.6;

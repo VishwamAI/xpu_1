@@ -1,6 +1,4 @@
-use crate::{
-    EnergyProfile, PowerState, ProcessingUnit, ProcessingUnitType, Task, XpuOptimizerError,
-};
+use crate::{Task, XpuOptimizerError};
 
 pub trait CloudOffloader: Send + Sync {
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError>;
@@ -34,9 +32,10 @@ mod tests {
         let task = Task {
             id: 1,
             unit: crate::ProcessingUnit {
+                id: 0,
                 unit_type: crate::ProcessingUnitType::CPU,
                 processing_power: 1.0,
-                current_load: 0.0,
+                current_load: Duration::from_secs(0),
                 power_state: crate::PowerState::Normal,
                 energy_profile: crate::EnergyProfile::default(),
             },
@@ -45,6 +44,9 @@ mod tests {
             execution_time: Duration::from_secs(1),
             memory_requirement: 100,
             secure: false,
+            unit_type: crate::ProcessingUnitType::CPU,
+            estimated_duration: Duration::from_secs(1),
+            estimated_resource_usage: 100,
         };
 
         assert!(offloader.offload_task(&task).is_ok());

@@ -40,4 +40,6 @@ pub enum XpuOptimizerError {
     PowerManagementError(String),
     #[error("Resource allocation error: {0}")]
     ResourceAllocationError(String),
+    #[error("Optimization error: {0}")]
+    OptimizationError(String),
 }

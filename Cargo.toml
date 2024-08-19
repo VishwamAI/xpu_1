@@ -4,6 +4,20 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+chrono = "0.4"
+petgraph = "0.6"
+log = "0.4"
+thiserror = "1.0"
+argon2 = "0.5"
+jsonwebtoken = "8.3"
+futures = "0.3"
+tokio = { version = "1.28", features = ["full"] }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = { version = "0.3", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmark"
+harness = false

@@ -31,6 +31,7 @@ impl SimpleRegressionModel {
             ProcessingUnitType::GPU => 1.0,
             ProcessingUnitType::NPU => 2.0,
             ProcessingUnitType::FPGA => 3.0,
+            ProcessingUnitType::LPU => 4.0,
         }
     }
 }

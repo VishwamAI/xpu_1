@@ -69,7 +69,8 @@ impl TaskDataManager for InMemoryTaskDataManager {
 
     fn clear_old_data(&mut self, threshold: Duration) {
         let now = std::time::Instant::now();
-        self.execution_data
-            .retain(|data| now.duration_since(std::time::Instant::now()) < threshold);
+        self.execution_data.retain(|data| {
+            now.duration_since(std::time::Instant::now() - data.execution_time) < threshold
+        });
     }
 }
