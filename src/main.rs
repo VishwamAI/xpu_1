@@ -5,7 +5,7 @@ mod task_scheduling;
 use memory_management::MemoryManager;
 use power_management::PowerManager;
 use std::time::Duration;
-use task_scheduling::{Task, TaskScheduler};
+use task_scheduling::{Task, TaskScheduler, ProcessingUnitType};
 
 fn main() {
     println!("XPU Manager Rust Implementation");
@@ -24,18 +24,21 @@ fn main() {
             priority: 2,
             execution_time: Duration::from_secs(5),
             memory_requirement: 200,
+            unit_type: ProcessingUnitType::CPU,
         },
         Task {
             id: 2,
             priority: 1,
             execution_time: Duration::from_secs(3),
             memory_requirement: 100,
+            unit_type: ProcessingUnitType::GPU,
         },
         Task {
             id: 3,
             priority: 3,
             execution_time: Duration::from_secs(7),
             memory_requirement: 300,
+            unit_type: ProcessingUnitType::NPU,
         },
     ];
 
