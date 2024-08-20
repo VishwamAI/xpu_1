@@ -36,8 +36,8 @@ fn test_parse_config_file() {
     assert_eq!(config.memory_pool_size, 1024);
     assert!(matches!(config.scheduler_type, SchedulerType::RoundRobin));
     assert!(matches!(config.memory_manager_type, MemoryManagerType::Simple));
-    assert_eq!(config.power_management_policy, PowerManagementPolicy::Default);
-    assert_eq!(config.cloud_offloading_policy, CloudOffloadingPolicy::Default);
+    assert!(matches!(config.power_management_policy, PowerManagementPolicy::Default));
+    assert!(matches!(config.cloud_offloading_policy, CloudOffloadingPolicy::Default));
     assert_eq!(config.adaptive_optimization_policy, "default");
 }
 
