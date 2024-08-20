@@ -1,6 +1,6 @@
 [package]
 name = "xpu_manager_rust"
-version = "0.0.1"
+version = "0.0.3"
 edition = "2021"
 
 [dependencies]
@@ -14,9 +14,13 @@ argon2 = "0.5"
 jsonwebtoken = "8.3"
 futures = "0.3"
 tokio = { version = "1.28", features = ["full"] }
+clap = "3.2"
+serde_json = "1.0"
+uuid = { version = "1.3", features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
+tempfile = "3.2"
 
 [[bench]]
 name = "benchmark"
