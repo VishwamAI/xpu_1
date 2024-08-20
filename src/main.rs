@@ -3,6 +3,8 @@ use xpu_manager_rust::{
     XpuOptimizer, XpuOptimizerConfig,
     task_scheduling::{Task, ProcessingUnitType, SchedulerType},
     memory_management::MemoryManagerType,
+    power_management::PowerManagementPolicy,
+    cloud_offloading::CloudOffloadingPolicy,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
