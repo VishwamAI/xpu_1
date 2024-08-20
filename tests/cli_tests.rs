@@ -1,12 +1,11 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use xpu_manager_rust::cli::main::{parse_config_file, check_xpu_status, configure_xpu_manager, start_xpu_manager, stop_xpu_manager};
-use xpu_manager_rust::task_scheduling::{SchedulerType, Scheduler};
+use xpu_manager_rust::task_scheduling::SchedulerType;
 use xpu_manager_rust::XpuOptimizerError;
-use xpu_manager_rust::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig};
-use xpu_manager_rust::memory_management::{MemoryManager, MemoryManagerType};
-use xpu_manager_rust::task_scheduling::TaskScheduler;
+use xpu_manager_rust::xpu_optimization::XpuOptimizerConfig;
+use xpu_manager_rust::memory_management::MemoryManagerType;
+use xpu_manager_rust::power_management::PowerManagementPolicy;
+use xpu_manager_rust::cloud_offloading::CloudOffloadingPolicy;
 
 #[test]
 fn test_parse_config_file() {
@@ -35,8 +34,8 @@ fn test_parse_config_file() {
     assert_eq!(config.memory_pool_size, 1024);
     assert!(matches!(config.scheduler_type, SchedulerType::RoundRobin));
     assert!(matches!(config.memory_manager_type, MemoryManagerType::Simple));
-    assert!(matches!(config.power_management_policy, PowerManagementPolicy::Default));
-    assert!(matches!(config.cloud_offloading_policy, CloudOffloadingPolicy::Default));
+    assert_eq!(config.power_management_policy, PowerManagementPolicy::Default);
+    assert_eq!(config.cloud_offloading_policy, CloudOffloadingPolicy::Default);
     assert_eq!(config.adaptive_optimization_policy, "default");
 }
 
