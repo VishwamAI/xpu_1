@@ -1,16 +1,34 @@
-use crate::{ProcessingUnit, Task, XpuOptimizerError, PowerState, EnergyProfile, ProcessingUnitType};
+use crate::task_scheduling::{Task, ProcessingUnit};
+use crate::XpuOptimizerError;
 use std::collections::HashMap;
 
+#[derive(Debug)]
+pub enum ClusterManagementError {
+    NodeAlreadyExists(String),
+    NodeNotFound(String),
+    InvalidNodeStatus,
+}
+
+impl std::fmt::Display for ClusterManagementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClusterManagementError::NodeAlreadyExists(id) => write!(f, "Node with ID {} already exists", id),
+            ClusterManagementError::NodeNotFound(id) => write!(f, "Node with ID {} not found", id),
+            ClusterManagementError::InvalidNodeStatus => write!(f, "Invalid node status"),
+        }
+    }
+}
+
 pub trait ClusterManager: Send + Sync {
-    fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError>;
-    fn remove_node(&mut self, node_id: &str) -> Result<(), XpuOptimizerError>;
+    fn add_node(&mut self, node: ClusterNode) -> Result<(), ClusterManagementError>;
+    fn remove_node(&mut self, node_id: &str) -> Result<(), ClusterManagementError>;
     fn get_node(&self, node_id: &str) -> Option<&ClusterNode>;
     fn list_nodes(&self) -> Vec<&ClusterNode>;
     fn update_node_status(
         &mut self,
         node_id: &str,
         status: NodeStatus,
-    ) -> Result<(), XpuOptimizerError>;
+    ) -> Result<(), ClusterManagementError>;
 }
 
 pub trait LoadBalancer: Send + Sync {
@@ -50,23 +68,17 @@ impl SimpleClusterManager {
 }
 
 impl ClusterManager for SimpleClusterManager {
-    fn add_node(&mut self, node: ClusterNode) -> Result<(), XpuOptimizerError> {
+    fn add_node(&mut self, node: ClusterNode) -> Result<(), ClusterManagementError> {
         if self.nodes.contains_key(&node.id) {
-            return Err(XpuOptimizerError::ClusterInitializationError(format!(
-                "Node with ID {} already exists",
-                node.id
-            )));
+            return Err(ClusterManagementError::NodeAlreadyExists(node.id.clone()));
         }
         self.nodes.insert(node.id.clone(), node);
         Ok(())
     }
 
-    fn remove_node(&mut self, node_id: &str) -> Result<(), XpuOptimizerError> {
+    fn remove_node(&mut self, node_id: &str) -> Result<(), ClusterManagementError> {
         if self.nodes.remove(node_id).is_none() {
-            return Err(XpuOptimizerError::ClusterInitializationError(format!(
-                "Node with ID {} not found",
-                node_id
-            )));
+            return Err(ClusterManagementError::NodeNotFound(node_id.to_string()));
         }
         Ok(())
     }
@@ -83,15 +95,12 @@ impl ClusterManager for SimpleClusterManager {
         &mut self,
         node_id: &str,
         status: NodeStatus,
-    ) -> Result<(), XpuOptimizerError> {
+    ) -> Result<(), ClusterManagementError> {
         if let Some(node) = self.nodes.get_mut(node_id) {
             node.status = status;
             Ok(())
         } else {
-            Err(XpuOptimizerError::ClusterInitializationError(format!(
-                "Node with ID {} not found",
-                node_id
-            )))
+            Err(ClusterManagementError::NodeNotFound(node_id.to_string()))
         }
     }
 }
@@ -122,7 +131,7 @@ impl LoadBalancer for RoundRobinLoadBalancer {
             let node = &active_nodes[i % active_nodes.len()];
             distribution
                 .entry(node.id.clone())
-                .or_default()
+                .or_insert_with(Vec::new)
                 .push(task.clone());
         }
 
@@ -133,6 +142,9 @@ impl LoadBalancer for RoundRobinLoadBalancer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task_scheduling::{ProcessingUnitType, Task};
+    use crate::power_management::{PowerState, EnergyProfile};
+    use std::time::Duration;
 
     fn create_test_node(id: &str) -> ClusterNode {
         ClusterNode {
@@ -141,7 +153,7 @@ mod tests {
             processing_units: vec![ProcessingUnit {
                 id: 0,
                 unit_type: ProcessingUnitType::CPU,
-                current_load: std::time::Duration::new(0, 0),
+                current_load: Duration::new(0, 0),
                 processing_power: 1.0,
                 power_state: PowerState::Normal,
                 energy_profile: EnergyProfile::default(),
@@ -182,10 +194,10 @@ mod tests {
             create_test_node("3"),
         ];
         let tasks = vec![
-            Task { id: 1, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
-            Task { id: 2, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
-            Task { id: 3, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
-            Task { id: 4, priority: 1, execution_time: std::time::Duration::new(1, 0), memory_requirement: 1024, unit_type: ProcessingUnitType::CPU, unit: ProcessingUnit { id: 0, unit_type: ProcessingUnitType::CPU, current_load: std::time::Duration::new(0, 0), processing_power: 1.0, power_state: PowerState::Normal, energy_profile: EnergyProfile::default() }, dependencies: vec![], secure: false, estimated_duration: std::time::Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 1, unit_type: ProcessingUnitType::CPU, priority: 1, dependencies: vec![], execution_time: Duration::new(1, 0), memory_requirement: 1024, secure: false, estimated_duration: Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 2, unit_type: ProcessingUnitType::CPU, priority: 1, dependencies: vec![], execution_time: Duration::new(1, 0), memory_requirement: 1024, secure: false, estimated_duration: Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 3, unit_type: ProcessingUnitType::CPU, priority: 1, dependencies: vec![], execution_time: Duration::new(1, 0), memory_requirement: 1024, secure: false, estimated_duration: Duration::new(1, 0), estimated_resource_usage: 1024 },
+            Task { id: 4, unit_type: ProcessingUnitType::CPU, priority: 1, dependencies: vec![], execution_time: Duration::new(1, 0), memory_requirement: 1024, secure: false, estimated_duration: Duration::new(1, 0), estimated_resource_usage: 1024 },
         ];
 
         let distribution = balancer.distribute_tasks(&tasks, &nodes).unwrap();
