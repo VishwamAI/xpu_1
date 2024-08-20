@@ -33,7 +33,6 @@ use crate::task_scheduling::{
     SchedulerType, ProcessingUnitTrait, Task,
 };
 use crate::XpuOptimizerError;
-use crate::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, MachineLearningOptimizer};
 
 // Processing unit modules
 use crate::cpu::core::CPU;
@@ -388,8 +387,8 @@ pub struct XpuOptimizerConfig {
     pub memory_pool_size: usize,
     pub scheduler_type: SchedulerType,
     pub memory_manager_type: MemoryManagerType,
-    pub power_management_policy: String,
-    pub cloud_offloading_policy: String,
+    pub power_management_policy: PowerManagementPolicy,
+    pub cloud_offloading_policy: CloudOffloadingPolicy,
     pub adaptive_optimization_policy: String,
 }
 
@@ -400,8 +399,8 @@ impl Default for XpuOptimizerConfig {
             memory_pool_size: 1024 * 1024 * 1024, // 1 GB
             scheduler_type: SchedulerType::RoundRobin,
             memory_manager_type: MemoryManagerType::Simple,
-            power_management_policy: "default".to_string(),
-            cloud_offloading_policy: "default".to_string(),
+            power_management_policy: PowerManagementPolicy::Default,
+            cloud_offloading_policy: CloudOffloadingPolicy::Default,
             adaptive_optimization_policy: "default".to_string(),
         }
     }
