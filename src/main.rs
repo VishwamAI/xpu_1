@@ -14,8 +14,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory_pool_size: 10_485_760, // 10 MB in bytes
         scheduler_type: SchedulerType::RoundRobin,
         memory_manager_type: MemoryManagerType::Simple,
-        power_management_policy: "default".to_string(),
-        cloud_offloading_policy: "default".to_string(),
+        power_management_policy: PowerManagementPolicy::Default,
+        cloud_offloading_policy: CloudOffloadingPolicy::Default,
         adaptive_optimization_policy: "default".to_string(),
     };
 
