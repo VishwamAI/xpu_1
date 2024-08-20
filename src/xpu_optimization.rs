@@ -49,11 +49,7 @@ impl From<std::io::Error> for XpuOptimizerError {
     }
 }
 
-// Explicit type annotation for errors
-type ExecutionErrors = Vec<XpuOptimizerError>;
 
-// Explicit type annotation for errors
-type ExecutionErrors = Vec<XpuOptimizerError>;
 
 // Removed duplicate implementation
 
