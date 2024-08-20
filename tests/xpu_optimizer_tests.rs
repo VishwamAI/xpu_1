@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use xpu_manager_rust::{
     EnergyProfile, MemoryManager, PowerManager, PowerState, ProcessingUnitType,
     Task, Scheduler, XpuOptimizer, XpuOptimizerConfig, SchedulerType, MemoryManagerType,
+    power_management::PowerManagementPolicy,
+    cloud_offloading::CloudOffloadingPolicy,
 };
 
 #[cfg(test)]
@@ -16,8 +18,8 @@ mod tests {
             memory_pool_size: 1024,
             scheduler_type: SchedulerType::RoundRobin,
             memory_manager_type: MemoryManagerType::Simple,
-            power_management_policy: "default".to_string(),
-            cloud_offloading_policy: "default".to_string(),
+            power_management_policy: PowerManagementPolicy::Default,
+            cloud_offloading_policy: CloudOffloadingPolicy::Default,
             adaptive_optimization_policy: "default".to_string(),
         };
         let optimizer = XpuOptimizer::new(config)?;
