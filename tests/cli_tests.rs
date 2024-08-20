@@ -1,11 +1,13 @@
 use tempfile::TempDir;
-use xpu_manager_rust::cli::main::{parse_config_file, check_xpu_status, configure_xpu_manager, start_xpu_manager, stop_xpu_manager};
-use xpu_manager_rust::task_scheduling::SchedulerType;
-use xpu_manager_rust::XpuOptimizerError;
-use xpu_manager_rust::xpu_optimization::XpuOptimizerConfig;
-use xpu_manager_rust::memory_management::MemoryManagerType;
-use xpu_manager_rust::power_management::PowerManagementPolicy;
-use xpu_manager_rust::cloud_offloading::CloudOffloadingPolicy;
+use xpu_manager_rust::{
+    cli::main::{parse_config_file, check_xpu_status, configure_xpu_manager, start_xpu_manager, stop_xpu_manager},
+    task_scheduling::{SchedulerType, Scheduler},
+    XpuOptimizerError,
+    xpu_optimization::{XpuOptimizerConfig, XpuOptimizer},
+    memory_management::MemoryManagerType,
+    power_management::PowerManagementPolicy,
+    cloud_offloading::CloudOffloadingPolicy,
+};
 
 #[test]
 fn test_parse_config_file() {
@@ -107,14 +109,13 @@ fn test_configure_xpu_manager_error() {
 // Add more tests for other CLI functionalities as needed
 
 #[test]
-fn test_xpu_optimizer_initialization() {
+fn test_xpu_optimizer_initialization() -> Result<(), Box<dyn std::error::Error>> {
     let config = XpuOptimizerConfig::default();
-    let result = XpuOptimizer::new(config.clone());
-    assert!(result.is_ok());
+    let optimizer = XpuOptimizer::new(config.clone())?;
 
-    if let Ok(optimizer) = result {
-        assert_eq!(optimizer.processing_units.len(), config.num_processing_units);
-        assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)));
-        assert_eq!(optimizer.task_queue.len(), 0);
-    }
+    assert_eq!(optimizer.processing_units.len(), config.num_processing_units);
+    assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)));
+    assert_eq!(optimizer.task_queue.len(), 0);
+
+    Ok(())
 }
