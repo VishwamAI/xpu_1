@@ -2,10 +2,11 @@ use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use xpu_manager_rust::{
     memory_management::{MemoryManager, SimpleMemoryManager},
-    power_management::{PowerManager, PowerState},
+    power_management::{PowerManager, PowerState, PowerManagementPolicy},
     task_scheduling::{ProcessingUnitType, Task, Scheduler, SchedulerType},
     XpuOptimizerError,
     xpu_optimization::{XpuOptimizer, XpuOptimizerConfig},
+    cloud_offloading::CloudOffloadingPolicy,
 };
 
 #[test]
@@ -15,8 +16,8 @@ fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError>
         memory_pool_size: 1000,
         scheduler_type: SchedulerType::RoundRobin,
         memory_manager_type: xpu_manager_rust::memory_management::MemoryManagerType::Simple,
-        power_management_policy: "default".to_string(),
-        cloud_offloading_policy: "default".to_string(),
+        power_management_policy: PowerManagementPolicy::Default,
+        cloud_offloading_policy: CloudOffloadingPolicy::Default,
         adaptive_optimization_policy: "default".to_string(),
     };
     let mut optimizer = XpuOptimizer::new(config)?;
@@ -86,8 +87,8 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
         memory_pool_size: 2000,
         scheduler_type: SchedulerType::RoundRobin,
         memory_manager_type: xpu_manager_rust::memory_management::MemoryManagerType::Simple,
-        power_management_policy: "default".to_string(),
-        cloud_offloading_policy: "default".to_string(),
+        power_management_policy: PowerManagementPolicy::Default,
+        cloud_offloading_policy: CloudOffloadingPolicy::Default,
         adaptive_optimization_policy: "default".to_string(),
     };
     let mut optimizer = XpuOptimizer::new(config)?;
