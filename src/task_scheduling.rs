@@ -1,35 +1,219 @@
-use crate::power_management::{EnergyProfile, PowerState};
+use crate::power_management::{EnergyProfile, PowerState, PowerManagementError};
 use crate::XpuOptimizerError;
-use rand::Rng;
+use crate::ml_models::MLModel;
+use crate::task_data::HistoricalTaskData;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::cmp::Ordering;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum ProcessingUnitType {
     CPU,
     GPU,
+    TPU,
     LPU,
     NPU,
     FPGA,
     VPU,
 }
 
-impl fmt::Display for ProcessingUnitType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+impl Ord for ProcessingUnitType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.to_string().cmp(&other.to_string())
+    }
+}
+
+impl PartialOrd for ProcessingUnitType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SchedulerType {
+    RoundRobin,
+    LoadBalancing,
+    AIPredictive,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum MemoryManagerType {
+    Simple,
+    Dynamic,
+}
+
+impl fmt::Display for ProcessingUnitType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+pub trait ProcessingUnitTrait: Send + Sync + Debug {
+    fn get_id(&self) -> usize;
+    fn get_unit_type(&self) -> Result<ProcessingUnitType, XpuOptimizerError>;
+    fn get_current_load(&self) -> Result<Duration, XpuOptimizerError>;
+    fn get_processing_power(&self) -> Result<f64, XpuOptimizerError>;
+    fn get_power_state(&self) -> Result<PowerState, XpuOptimizerError>;
+    fn get_energy_profile(&self) -> Result<&EnergyProfile, XpuOptimizerError>;
+    fn get_load_percentage(&self) -> Result<f64, XpuOptimizerError>;
+    fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError>;
+    fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError>;
+    fn set_power_state(&mut self, state: PowerState) -> Result<(), PowerManagementError>;
+    fn get_available_capacity(&self) -> Result<Duration, XpuOptimizerError>;
+    fn execute_task(&mut self, task: &Task) -> Result<Duration, XpuOptimizerError>;
+    fn clone_box(&self) -> Box<dyn ProcessingUnitTrait + Send + Sync>;
+    fn set_energy_profile(&mut self, profile: EnergyProfile) -> Result<(), PowerManagementError>;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProcessingUnit {
     pub id: usize,
     pub unit_type: ProcessingUnitType,
     pub current_load: Duration,
-    pub processing_power: f32,
+    pub processing_power: f64,
     pub power_state: PowerState,
     pub energy_profile: EnergyProfile,
+}
+
+impl ProcessingUnitTrait for ProcessingUnit {
+    fn get_id(&self) -> usize {
+        self.id
+    }
+
+    fn get_unit_type(&self) -> Result<ProcessingUnitType, XpuOptimizerError> {
+        Ok(self.unit_type.clone())
+    }
+
+    fn get_current_load(&self) -> Result<Duration, XpuOptimizerError> {
+        Ok(self.current_load)
+    }
+
+    fn get_processing_power(&self) -> Result<f64, XpuOptimizerError> {
+        Ok(self.processing_power)
+    }
+
+    fn get_power_state(&self) -> Result<PowerState, XpuOptimizerError> {
+        Ok(self.power_state.clone())
+    }
+
+    fn get_energy_profile(&self) -> Result<&EnergyProfile, XpuOptimizerError> {
+        Ok(&self.energy_profile)
+    }
+
+    fn get_load_percentage(&self) -> Result<f64, XpuOptimizerError> {
+        if self.processing_power == 0.0 {
+            return Err(XpuOptimizerError::DivisionByZeroError("Processing power is zero".to_string()));
+        }
+        Ok(self.current_load.as_secs_f64() / self.processing_power)
+    }
+
+    fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
+        Ok(self.unit_type == task.unit_type &&
+           self.current_load.saturating_add(task.execution_time) <= Duration::from_secs_f64(self.processing_power))
+    }
+
+    fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {
+        if self.can_handle_task(task)? {
+            self.current_load = self.current_load.saturating_add(task.execution_time);
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::ResourceAllocationError(
+                format!("Insufficient capacity on {} for task {}", self.unit_type, task.id)
+            ))
+        }
+    }
+
+    fn set_power_state(&mut self, state: PowerState) -> Result<(), PowerManagementError> {
+        self.power_state = state;
+        Ok(())
+    }
+
+    fn get_available_capacity(&self) -> Result<Duration, XpuOptimizerError> {
+        Ok(Duration::from_secs_f64(self.processing_power).saturating_sub(self.current_load))
+    }
+
+    fn execute_task(&mut self, task: &Task) -> Result<Duration, XpuOptimizerError> {
+        self.assign_task(task)?;
+        let execution_time = task.execution_time;
+        self.current_load = self.current_load.saturating_add(execution_time);
+        Ok(execution_time)
+    }
+
+    fn set_energy_profile(&mut self, profile: EnergyProfile) -> Result<(), PowerManagementError> {
+        self.energy_profile = profile;
+        Ok(())
+    }
+
+    fn clone_box(&self) -> Box<dyn ProcessingUnitTrait + Send + Sync> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// Removed duplicate Clone implementation for ProcessingUnit
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Task {
+    pub id: usize,
+    pub priority: u8,
+    pub dependencies: Vec<usize>,
+    pub execution_time: Duration,
+    pub memory_requirement: usize,
+    pub secure: bool,
+    pub estimated_duration: Duration,
+    pub estimated_resource_usage: usize,
+    pub unit_type: ProcessingUnitType,
+}
+
+impl Task {
+    pub fn new(
+        id: usize,
+        priority: u8,
+        dependencies: Vec<usize>,
+        execution_time: Duration,
+        memory_requirement: usize,
+        secure: bool,
+        unit_type: ProcessingUnitType,
+    ) -> Self {
+        Task {
+            id,
+            priority,
+            dependencies,
+            execution_time,
+            memory_requirement,
+            secure,
+            estimated_duration: Duration::default(),
+            estimated_resource_usage: 0,
+            unit_type,
+        }
+    }
+
+    pub fn new_estimated(
+        id: usize,
+        priority: u8,
+        dependencies: Vec<usize>,
+        estimated_duration: Duration,
+        estimated_resource_usage: usize,
+        unit_type: ProcessingUnitType,
+    ) -> Self {
+        Task {
+            id,
+            priority,
+            dependencies,
+            execution_time: Duration::default(),
+            memory_requirement: estimated_resource_usage,
+            secure: false,
+            estimated_duration,
+            estimated_resource_usage,
+            unit_type,
+        }
+    }
 }
 
 pub struct OptimizationMetrics {
@@ -48,268 +232,288 @@ impl Default for OptimizationMetrics {
     }
 }
 
-pub struct TaskScheduler {
-    pub tasks: VecDeque<Task>,
-    processing_units: Vec<ProcessingUnit>,
-    historical_data: HashMap<ProcessingUnitType, Vec<(Duration, Duration)>>,
-    last_load_balance: Instant,
-    load_balance_threshold: f32,
-    prediction_weight: f32,
+pub trait TaskScheduler: Send + Sync {
+    fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError>;
+    fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>>;
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Task {
-    pub id: usize,
-    pub priority: u8,
-    pub execution_time: Duration,
-    pub memory_requirement: usize,
-    pub unit_type: ProcessingUnitType,
-    pub unit: ProcessingUnit,
-    pub dependencies: Vec<usize>,
-    pub secure: bool,
-    pub estimated_duration: Duration,
-    pub estimated_resource_usage: usize,
+#[derive(Debug)]
+pub enum Scheduler {
+    RoundRobin(RoundRobinScheduler),
+    LoadBalancing(LoadBalancingScheduler),
+    AIOptimized(AIOptimizedScheduler),
 }
 
-impl TaskScheduler {
-    pub fn new(num_processing_units: usize) -> Self {
-        let mut rng = rand::thread_rng();
-        TaskScheduler {
-            tasks: VecDeque::new(),
-            processing_units: (0..num_processing_units)
-                .map(|id| ProcessingUnit {
-                    id,
-                    unit_type: match rng.gen_range(0..6) {
-                        0 => ProcessingUnitType::CPU,
-                        1 => ProcessingUnitType::GPU,
-                        2 => ProcessingUnitType::LPU,
-                        3 => ProcessingUnitType::NPU,
-                        4 => ProcessingUnitType::FPGA,
-                        _ => ProcessingUnitType::VPU,
-                    },
-                    current_load: Duration::new(0, 0),
-                    processing_power: 1.0,
-                    power_state: PowerState::Normal,
-                    energy_profile: EnergyProfile::default(),
+impl TaskScheduler for Scheduler {
+    fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError> {
+        match self {
+            Scheduler::RoundRobin(s) => s.schedule(tasks, units),
+            Scheduler::LoadBalancing(s) => s.schedule(tasks, units),
+            Scheduler::AIOptimized(s) => s.schedule(tasks, units),
+        }
+    }
+
+    fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+}
+
+impl Scheduler {
+    pub fn lock(&self) -> Result<Box<dyn TaskScheduler + Send + Sync>, XpuOptimizerError> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+impl Scheduler {
+    pub fn new(scheduler_type: SchedulerType, ml_model: Option<Arc<Mutex<dyn MLModel + Send + Sync>>>) -> Self {
+        match scheduler_type {
+            SchedulerType::RoundRobin => Scheduler::RoundRobin(RoundRobinScheduler::new()),
+            SchedulerType::LoadBalancing => Scheduler::LoadBalancing(LoadBalancingScheduler::new()),
+            SchedulerType::AIPredictive => {
+                if let Some(model) = ml_model {
+                    Scheduler::AIOptimized(AIOptimizedScheduler::new(model))
+                } else {
+                    // Fallback to RoundRobin if no ML model is provided
+                    Scheduler::RoundRobin(RoundRobinScheduler::new())
+                }
+            }
+        }
+    }
+}
+
+// The Clone implementation for Scheduler is already provided above.
+// Removing the duplicate implementation to avoid conflicts.
+
+impl std::fmt::Display for Scheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Scheduler::RoundRobin(_) => write!(f, "RoundRobin"),
+            Scheduler::LoadBalancing(_) => write!(f, "LoadBalancing"),
+            Scheduler::AIOptimized(_) => write!(f, "AIOptimized"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RoundRobinScheduler;
+
+impl RoundRobinScheduler {
+    pub fn new() -> Self {
+        RoundRobinScheduler
+    }
+}
+
+impl TaskScheduler for RoundRobinScheduler {
+    fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError> {
+        if units.is_empty() {
+            return Err(XpuOptimizerError::SchedulingError("No processing units available".to_string()));
+        }
+
+        let mut scheduled_tasks = Vec::new();
+        let mut unit_index = 0;
+
+        for task in tasks {
+            let mut task_scheduled = false;
+            for _ in 0..units.len() {
+                let unit = &units[unit_index];
+                let can_handle = unit.lock()
+                    .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?
+                    .can_handle_task(task)?;
+
+                if can_handle {
+                    let mut unit_guard = unit.lock()
+                        .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
+                    unit_guard.assign_task(task)?;
+                    drop(unit_guard); // Explicitly drop the lock before cloning
+                    scheduled_tasks.push((task.clone(), Arc::clone(unit)));
+                    task_scheduled = true;
+                    break;
+                }
+                unit_index = (unit_index + 1) % units.len();
+            }
+            if !task_scheduled {
+                return Err(XpuOptimizerError::SchedulingError(format!("No suitable processing unit for task {}", task.id)));
+            }
+            unit_index = (unit_index + 1) % units.len();
+        }
+
+        Ok(scheduled_tasks)
+    }
+
+    fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadBalancingScheduler;
+
+impl LoadBalancingScheduler {
+    pub fn new() -> Self {
+        LoadBalancingScheduler
+    }
+}
+
+impl TaskScheduler for LoadBalancingScheduler {
+    fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError> {
+        let mut scheduled_tasks = Vec::new();
+        let mut unit_loads: Vec<Duration> = Vec::with_capacity(units.len());
+
+        for unit in units {
+            let load = unit.lock()
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?
+                .get_current_load()?;
+            unit_loads.push(load);
+        }
+
+        for task in tasks {
+            let (assigned_unit_index, assigned_unit) = units.iter().enumerate()
+                .filter_map(|(index, unit)| {
+                    let guard = unit.lock().ok()?;
+                    guard.can_handle_task(task).ok().and_then(|can_handle| {
+                        if can_handle {
+                            Some((index, Arc::clone(unit)))
+                        } else {
+                            None
+                        }
+                    })
                 })
-                .collect(),
-            historical_data: HashMap::new(),
-            last_load_balance: Instant::now(),
-            load_balance_threshold: 0.7,
-            prediction_weight: 0.5,
+                .min_by_key(|(index, _)| unit_loads[*index])
+                .ok_or_else(|| XpuOptimizerError::SchedulingError(format!("No suitable processing unit for task {}", task.id)))?;
+
+            let mut unit_guard = assigned_unit.lock()
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
+
+            unit_guard.assign_task(task)?;
+            scheduled_tasks.push((task.clone(), assigned_unit.clone()));
+            unit_loads[assigned_unit_index] = unit_loads[assigned_unit_index].saturating_add(task.execution_time);
         }
+
+        Ok(scheduled_tasks)
     }
 
-    pub fn add_task(&mut self, task: Task) {
-        let position = self.tasks.iter().position(|t| t.priority < task.priority);
-        match position {
-            Some(index) => self.tasks.insert(index, task),
-            None => self.tasks.push_back(task),
+    fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AIOptimizedScheduler {
+    ml_model: Arc<Mutex<dyn MLModel + Send + Sync>>,
+}
+
+impl AIOptimizedScheduler {
+    pub fn new(ml_model: Arc<Mutex<dyn MLModel + Send + Sync>>) -> Self {
+        AIOptimizedScheduler { ml_model }
+    }
+}
+
+impl TaskScheduler for AIOptimizedScheduler {
+    fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError> {
+        let mut scheduled_tasks = Vec::new();
+
+        for task in tasks {
+            let historical_data = HistoricalTaskData {
+                task_id: task.id,
+                execution_time: task.execution_time,
+                memory_usage: task.memory_requirement,
+                unit_type: task.unit_type.clone(),
+                priority: task.priority,
+            };
+
+            let prediction = self.ml_model.lock()
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?
+                .predict(&historical_data)?;
+
+            let best_unit = units
+                .iter()
+                .filter_map(|unit| {
+                    let unit_guard = unit.lock()
+                        .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))
+                        .ok()?;
+                    unit_guard.can_handle_task(task)
+                        .ok()
+                        .and_then(|can_handle| if can_handle { Some(Arc::clone(unit)) } else { None })
+                })
+                .min_by_key(|unit| {
+                    unit.lock()
+                        .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))
+                        .and_then(|guard| guard.get_current_load())
+                        .map(|load| load.saturating_add(prediction.estimated_duration))
+                        .unwrap_or(Duration::MAX)
+                })
+                .ok_or_else(|| XpuOptimizerError::SchedulingError("No suitable processing units available".to_string()))?;
+
+            best_unit.lock()
+                .map_err(|e| XpuOptimizerError::LockError(e.to_string()))?
+                .assign_task(task)?;
+            scheduled_tasks.push((task.clone(), Arc::clone(&best_unit)));
         }
+
+        Ok(scheduled_tasks)
     }
 
-    pub fn get_next_task(&mut self) -> Option<Task> {
-        self.tasks.pop_front()
+    fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+}
+
+pub fn calculate_optimization_metrics(
+    completed_tasks: &[(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)],
+    start_time: Instant,
+) -> Result<OptimizationMetrics, XpuOptimizerError> {
+    let total_duration = start_time.elapsed();
+    let total_latency: Duration = completed_tasks
+        .iter()
+        .map(|(task, _)| task.execution_time)
+        .sum();
+    let average_latency = if !completed_tasks.is_empty() {
+        total_latency / completed_tasks.len() as u32
+    } else {
+        Duration::new(0, 0)
+    };
+    let average_load = completed_tasks
+        .iter()
+        .try_fold(0.0, |acc, (_, unit)| -> Result<f64, XpuOptimizerError> {
+            let guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
+            guard.get_load_percentage().and_then(|load| Ok(acc + load))
+        })?;
+    let average_load = if !completed_tasks.is_empty() {
+        average_load / completed_tasks.len() as f64
+    } else {
+        0.0
+    };
+
+    Ok(OptimizationMetrics {
+        total_duration,
+        average_latency,
+        average_load: average_load as f32,
+    })
+}
+
+pub fn apply_optimization(
+    tasks: &mut [Task],
+    units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
+    params: &OptimizationParams,
+) -> Result<(), XpuOptimizerError> {
+    for task in tasks.iter_mut() {
+        task.priority = ((task.priority as f64) * params.task_priority_weight) as u8;
     }
 
-    pub fn schedule(&mut self) -> Result<Vec<Task>, XpuOptimizerError> {
-        let (completed_tasks, _) = self.schedule_with_metrics()?;
-        Ok(completed_tasks)
+    for unit in units.iter() {
+        let mut unit_guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
+        let mut energy_profile = unit_guard.get_energy_profile()?.clone();
+        energy_profile.consumption_rate *= params.power_efficiency_factor;
+        unit_guard.set_energy_profile(energy_profile)?;
     }
 
-    pub fn schedule_with_metrics(
-        &mut self,
-    ) -> Result<(Vec<Task>, OptimizationMetrics), XpuOptimizerError> {
-        println!("Scheduling tasks with adaptive optimization...");
-        let mut completed_tasks = Vec::new();
-        let mut unscheduled_tasks = VecDeque::new();
-        let max_retries = self.processing_units.len() * 2;
-        let mut retry_count = 0;
-        let mut total_latency = Duration::new(0, 0);
-        let start_time = Instant::now();
-
-        while let Some(task) = self.get_next_task() {
-            match self.find_optimal_unit_index(&task) {
-                Some(unit_index) => {
-                    let unit = &mut self.processing_units[unit_index];
-                    println!(
-                        "Executing task {} on processing unit {} ({})",
-                        task.id, unit.id, unit.unit_type
-                    );
-                    let task_start_time = Instant::now();
-                    unit.current_load += task.execution_time;
-                    let mut executed_task = task.clone();
-                    executed_task.unit = unit.clone(); // Assign the unit to the task
-                    completed_tasks.push(executed_task);
-                    retry_count = 0;
-
-                    // Update historical data
-                    let actual_duration = task_start_time.elapsed();
-                    total_latency += actual_duration;
-                    self.historical_data
-                        .entry(unit.unit_type.clone())
-                        .or_default()
-                        .push((task.execution_time, actual_duration));
-
-                    // Perform adaptive optimization
-                    self.adapt_scheduling_parameters(&completed_tasks);
-                }
-                None => {
-                    println!("No available processing unit for task {}", task.id);
-                    unscheduled_tasks.push_back(task);
-                    retry_count += 1;
-                    if retry_count >= max_retries {
-                        return Err(XpuOptimizerError::SchedulingError(
-                            "Max retries reached. Unable to schedule remaining tasks.".to_string(),
-                        ));
-                    }
-                }
-            }
-
-            if self.tasks.is_empty() && !unscheduled_tasks.is_empty() {
-                self.tasks.append(&mut unscheduled_tasks);
-            }
-
-            // Perform load balancing every 10 tasks
-            if completed_tasks.len() % 10 == 0 {
-                self.load_balance();
-            }
-        }
-
-        self.tasks.append(&mut unscheduled_tasks);
-        let total_duration = start_time.elapsed();
-        let average_latency = if !completed_tasks.is_empty() {
-            total_latency.div_f32(completed_tasks.len() as f32)
-        } else {
-            Duration::new(0, 0)
-        };
-        let average_load = self
-            .processing_units
-            .iter()
-            .map(|unit| unit.current_load)
-            .sum::<Duration>()
-            .div_f32(self.processing_units.len() as f32);
-
-        let metrics = OptimizationMetrics {
-            total_duration,
-            average_latency,
-            average_load: average_load.as_secs_f32() / total_duration.as_secs_f32(),
-        };
-
-        Ok((completed_tasks, metrics))
-    }
-
-    fn find_optimal_unit_index(&self, task: &Task) -> Option<usize> {
-        self.processing_units
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, unit)| {
-                let predicted_duration = self.predict_duration(task, &unit.unit_type);
-                unit.current_load + predicted_duration
-            })
-            .map(|(index, _)| index)
-    }
-
-    fn predict_duration(&self, task: &Task, unit_type: &ProcessingUnitType) -> Duration {
-        if let Some(data) = self.historical_data.get(unit_type) {
-            let sum: Duration = data.iter().map(|(_, actual)| *actual).sum();
-            let count = data.len() as u32;
-            if count > 0 {
-                let historical_prediction = sum / count;
-                let weighted_prediction = (historical_prediction.as_secs_f32()
-                    * self.prediction_weight
-                    + task.execution_time.as_secs_f32() * (1.0 - self.prediction_weight))
-                    as u64;
-                Duration::from_secs(weighted_prediction)
-            } else {
-                task.execution_time
-            }
-        } else {
-            task.execution_time
-        }
-    }
-
-    fn load_balance(&mut self) {
-        if self.last_load_balance.elapsed() < Duration::from_secs(60) {
-            return;
-        }
-
-        println!("Performing load balancing...");
-        let total_load: Duration = self
-            .processing_units
-            .iter()
-            .map(|unit| unit.current_load)
-            .sum();
-        let average_load = total_load / self.processing_units.len() as u32;
-
-        for unit in &mut self.processing_units {
-            unit.current_load = unit.current_load.clamp(Duration::ZERO, average_load * 2);
-        }
-
-        self.last_load_balance = Instant::now();
-    }
-
-    pub fn apply_optimization(&mut self, params: OptimizationParams) {
-        println!("Applying optimization parameters: {:?}", params);
-
-        // Adjust load balancing threshold
-        self.load_balance_threshold = params.load_balance_threshold;
-
-        // Update prediction weight for task duration estimation
-        self.prediction_weight = params.prediction_weight;
-
-        // Modify task priority calculation
-        for task in &mut self.tasks {
-            task.priority = ((task.priority as f32) * params.task_priority_weight) as u8;
-        }
-
-        // Adjust power efficiency settings for processing units
-        for unit in &mut self.processing_units {
-            unit.energy_profile.consumption_rate *= params.power_efficiency_factor;
-        }
-
-        println!("Optimization parameters applied successfully");
-    }
-
-    fn adapt_scheduling_parameters(&mut self, completed_tasks: &[Task]) {
-        println!(
-            "Adapting scheduling parameters based on {} completed tasks",
-            completed_tasks.len()
-        );
-
-        // Calculate average execution time for each processing unit type
-        let mut avg_execution_times: HashMap<ProcessingUnitType, Duration> = HashMap::new();
-        for task in completed_tasks {
-            avg_execution_times
-                .entry(task.unit.unit_type.clone())
-                .and_modify(|time| *time += task.execution_time)
-                .or_insert(task.execution_time);
-        }
-
-        // Adjust processing power based on average execution times
-        for (unit_type, avg_time) in avg_execution_times.iter() {
-            if let Some(unit) = self
-                .processing_units
-                .iter_mut()
-                .find(|u| u.unit_type == *unit_type)
-            {
-                let adjustment_factor = 1.0 / avg_time.as_secs_f32().max(1.0);
-                unit.processing_power =
-                    (unit.processing_power * 0.9 + adjustment_factor * 0.1).clamp(0.1, 2.0);
-            }
-        }
-
-        // Adjust task priorities based on waiting time
-        for task in self.tasks.iter_mut() {
-            task.priority = task.priority.saturating_add(1);
-        }
-    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationParams {
-    pub load_balance_threshold: f32,
-    pub prediction_weight: f32,
-    pub task_priority_weight: f32,
-    pub power_efficiency_factor: f32,
+    pub load_balance_threshold: f64,
+    pub prediction_weight: f64,
+    pub task_priority_weight: f64,
+    pub power_efficiency_factor: f64,
 }

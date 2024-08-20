@@ -1,4 +1,4 @@
-use crate::{ProcessingUnit, ProcessingUnitType};
+use crate::task_scheduling::ProcessingUnitType;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -7,11 +7,10 @@ pub struct TaskExecutionData {
     pub id: usize,
     pub execution_time: Duration,
     pub memory_usage: usize,
-    pub processing_unit: ProcessingUnitType,
+    pub unit_type: ProcessingUnitType,
     pub priority: u8,
     pub success: bool,
     pub memory_requirement: usize,
-    pub unit: ProcessingUnit,
 }
 
 #[derive(Clone, Debug)]
@@ -19,7 +18,7 @@ pub struct HistoricalTaskData {
     pub task_id: usize,
     pub execution_time: Duration,
     pub memory_usage: usize,
-    pub processing_unit: ProcessingUnitType,
+    pub unit_type: ProcessingUnitType,
     pub priority: u8,
 }
 
@@ -67,7 +66,7 @@ impl TaskDataManager for InMemoryTaskDataManager {
                 task_id: data.id,
                 execution_time: data.execution_time,
                 memory_usage: data.memory_usage,
-                processing_unit: data.processing_unit.clone(),
+                unit_type: data.unit_type.clone(),
                 priority: data.priority,
             })
             .collect()
@@ -91,18 +90,10 @@ mod tests {
             id,
             execution_time: Duration::from_secs(1),
             memory_usage: 1024,
-            processing_unit: ProcessingUnitType::CPU,
+            unit_type: ProcessingUnitType::CPU,
             priority: 1,
             success: true,
             memory_requirement: 2048,
-            unit: ProcessingUnit {
-                id: 0,
-                unit_type: ProcessingUnitType::CPU,
-                current_load: Duration::from_secs(0),
-                processing_power: 1.0,
-                power_state: crate::PowerState::Normal,
-                energy_profile: crate::EnergyProfile::default(),
-            },
         }
     }
 

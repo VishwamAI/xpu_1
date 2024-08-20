@@ -1,7 +1,12 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use xpu_manager_rust::cli::main::{parse_config_file, check_xpu_status, configure_xpu_manager, start_xpu_manager, stop_xpu_manager};
-use xpu_manager_rust::xpu_optimization::{XpuOptimizerConfig, SchedulerType, MemoryManagerType, XpuOptimizerError};
+use xpu_manager_rust::task_scheduling::{SchedulerType, Scheduler};
+use xpu_manager_rust::XpuOptimizerError;
+use xpu_manager_rust::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig};
+use xpu_manager_rust::memory_management::{MemoryManager, MemoryManagerType};
+use xpu_manager_rust::task_scheduling::TaskScheduler;
 
 #[test]
 fn test_parse_config_file() {
@@ -14,7 +19,10 @@ fn test_parse_config_file() {
             "num_processing_units": 4,
             "memory_pool_size": 1024,
             "scheduler_type": "RoundRobin",
-            "memory_manager_type": "Simple"
+            "memory_manager_type": "Simple",
+            "power_management_policy": "default",
+            "cloud_offloading_policy": "default",
+            "adaptive_optimization_policy": "default"
         }
         "#,
     )
@@ -27,6 +35,9 @@ fn test_parse_config_file() {
     assert_eq!(config.memory_pool_size, 1024);
     assert!(matches!(config.scheduler_type, SchedulerType::RoundRobin));
     assert!(matches!(config.memory_manager_type, MemoryManagerType::Simple));
+    assert_eq!(config.power_management_policy, "default");
+    assert_eq!(config.cloud_offloading_policy, "default");
+    assert_eq!(config.adaptive_optimization_policy, "default");
 }
 
 #[test]
@@ -65,7 +76,10 @@ fn test_configure_xpu_manager() {
             "num_processing_units": 8,
             "memory_pool_size": 2048,
             "scheduler_type": "LoadBalancing",
-            "memory_manager_type": "Dynamic"
+            "memory_manager_type": "Dynamic",
+            "power_management_policy": "adaptive",
+            "cloud_offloading_policy": "threshold-based",
+            "adaptive_optimization_policy": "ml-driven"
         }
         "#,
     )
@@ -92,3 +106,16 @@ fn test_configure_xpu_manager_error() {
 }
 
 // Add more tests for other CLI functionalities as needed
+
+#[test]
+fn test_xpu_optimizer_initialization() {
+    let config = XpuOptimizerConfig::default();
+    let result = XpuOptimizer::new(config.clone());
+    assert!(result.is_ok());
+
+    if let Ok(optimizer) = result {
+        assert_eq!(optimizer.processing_units.len(), config.num_processing_units);
+        assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)));
+        assert_eq!(optimizer.task_queue.len(), 0);
+    }
+}

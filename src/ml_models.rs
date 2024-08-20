@@ -1,19 +1,24 @@
 use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
-use crate::ProcessingUnitType;
+use crate::task_scheduling::ProcessingUnitType;
+use crate::XpuOptimizerError;
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 pub trait MLModel: Send + Sync {
-    fn train(&mut self, historical_data: &[TaskExecutionData]);
-    fn predict(&self, task_data: &HistoricalTaskData) -> TaskPrediction;
-    fn clone_box(&self) -> Box<dyn MLModel>;
+    fn train(&mut self, historical_data: &[TaskExecutionData]) -> Result<(), XpuOptimizerError>;
+    fn predict(&self, task_data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError>;
+    fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>>;
 }
 
-impl Clone for Box<dyn MLModel> {
-    fn clone(&self) -> Box<dyn MLModel> {
-        self.clone_box()
+// Remove duplicate Clone implementation
+
+impl std::fmt::Debug for dyn MLModel + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MLModel")
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SimpleRegressionModel {
     coefficients: Vec<f64>,
 }
@@ -29,10 +34,11 @@ impl SimpleRegressionModel {
         match unit {
             ProcessingUnitType::CPU => 0.0,
             ProcessingUnitType::GPU => 1.0,
-            ProcessingUnitType::NPU => 2.0,
-            ProcessingUnitType::FPGA => 3.0,
-            ProcessingUnitType::LPU => 4.0,
-            ProcessingUnitType::VPU => 5.0,
+            ProcessingUnitType::TPU => 2.0,
+            ProcessingUnitType::NPU => 3.0,
+            ProcessingUnitType::FPGA => 4.0,
+            ProcessingUnitType::LPU => 5.0,
+            ProcessingUnitType::VPU => 6.0,
         }
     }
 }
@@ -44,14 +50,18 @@ impl Default for SimpleRegressionModel {
 }
 
 impl MLModel for SimpleRegressionModel {
-    fn train(&mut self, historical_data: &[TaskExecutionData]) {
+    fn train(&mut self, historical_data: &[TaskExecutionData]) -> Result<(), XpuOptimizerError> {
+        if historical_data.is_empty() {
+            return Err(XpuOptimizerError::MLOptimizationError("No historical data provided for training".to_string()));
+        }
+
         let x: Vec<Vec<f64>> = historical_data
             .iter()
             .map(|data| {
                 vec![
                     data.execution_time.as_secs_f64(),
                     data.memory_usage as f64,
-                    self.normalize_processing_unit(&data.processing_unit),
+                    self.normalize_processing_unit(&data.unit_type),
                     data.priority as f64,
                 ]
             })
@@ -65,32 +75,30 @@ impl MLModel for SimpleRegressionModel {
         // Simple gradient descent
         let learning_rate = 0.01;
         let iterations = 1000;
-        let m = x.len();
+        let m = x.len() as f64;
 
         for _ in 0..iterations {
             let mut gradient = vec![0.0; self.coefficients.len()];
-            for (i, xi) in x.iter().enumerate() {
-                let h: f64 = xi
-                    .iter()
-                    .zip(&self.coefficients)
-                    .map(|(xi, ci)| xi * ci)
-                    .sum();
-                let error = h - y[i];
+            for (xi, &yi) in x.iter().zip(&y) {
+                let h: f64 = xi.iter().zip(&self.coefficients).map(|(xi, ci)| xi * ci).sum();
+                let error = h - yi;
                 for (j, &xij) in xi.iter().enumerate() {
-                    gradient[j] += error * xij / m as f64;
+                    gradient[j] += error * xij / m;
                 }
             }
             for (coeff, grad) in self.coefficients.iter_mut().zip(gradient.iter()) {
                 *coeff -= learning_rate * grad;
             }
         }
+
+        Ok(())
     }
 
-    fn predict(&self, task_data: &HistoricalTaskData) -> TaskPrediction {
+    fn predict(&self, task_data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError> {
         let features = [
             task_data.execution_time.as_secs_f64(),
             task_data.memory_usage as f64,
-            self.normalize_processing_unit(&task_data.processing_unit),
+            self.normalize_processing_unit(&task_data.unit_type),
             task_data.priority as f64,
         ];
 
@@ -101,23 +109,23 @@ impl MLModel for SimpleRegressionModel {
             .map(|(coef, feat)| coef * feat)
             .sum();
 
-        TaskPrediction {
+        if prediction.is_nan() || prediction.is_infinite() {
+            return Err(XpuOptimizerError::MLOptimizationError("Invalid prediction value".to_string()));
+        }
+
+        Ok(TaskPrediction {
             task_id: task_data.task_id,
-            estimated_duration: Duration::from_secs_f64(prediction),
-            estimated_resource_usage: (prediction * 100.0) as usize, // Dummy resource usage calculation
-            recommended_processing_unit: task_data.processing_unit.clone(), // Use the same processing unit as input for now
-        }
+            estimated_duration: Duration::from_secs_f64(prediction.max(0.0)),
+            estimated_resource_usage: (prediction.max(0.0) * 100.0) as usize, // Dummy resource usage calculation
+            recommended_processing_unit: task_data.unit_type.clone(),
+        })
     }
 
-    fn clone_box(&self) -> Box<dyn MLModel> {
-        Box::new(self.clone())
+    fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
     }
 }
 
-impl Clone for SimpleRegressionModel {
-    fn clone(&self) -> Self {
-        SimpleRegressionModel {
-            coefficients: self.coefficients.clone(),
-        }
-    }
-}
+// Removed manual Clone implementation as it's already derived
+
+// The Clone implementation is already derived using #[derive(Debug, Clone)]
