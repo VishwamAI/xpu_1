@@ -1,7 +1,7 @@
 use clap::{App, Arg, SubCommand};
 use crate::{
     XpuOptimizerError,
-    xpu_optimization::{XpuOptimizer, XpuOptimizerConfig},
+    XpuOptimizer, XpuOptimizerConfig,
     task_scheduling::{ProcessingUnitType, SchedulerType},
     memory_management::MemoryManagerType,
     power_management::{PowerState, PowerManagementPolicy},
@@ -10,6 +10,7 @@ use crate::{
 };
 use std::{fs, collections::HashMap};
 use serde_json;
+use log;
 
 fn main() -> Result<(), XpuOptimizerError> {
     let matches = App::new("XPU CLI")
