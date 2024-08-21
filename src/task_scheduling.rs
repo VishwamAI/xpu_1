@@ -235,13 +235,20 @@ impl Default for OptimizationMetrics {
 pub trait TaskScheduler: Send + Sync {
     fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError>;
     fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>>;
+    fn generate_token(&self) -> Result<String, XpuOptimizerError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Scheduler {
     RoundRobin(RoundRobinScheduler),
     LoadBalancing(LoadBalancingScheduler),
     AIOptimized(AIOptimizedScheduler),
+}
+
+impl Scheduler {
+    pub fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
 }
 
 impl TaskScheduler for Scheduler {
@@ -255,6 +262,10 @@ impl TaskScheduler for Scheduler {
 
     fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
+    }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
     }
 }
 
@@ -343,6 +354,10 @@ impl TaskScheduler for RoundRobinScheduler {
     fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
     }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -395,6 +410,10 @@ impl TaskScheduler for LoadBalancingScheduler {
     fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
     }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -423,30 +442,52 @@ impl TaskScheduler for AIOptimizedScheduler {
 
             let prediction = self.ml_model.lock()
                 .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?
-                .predict(&historical_data)?;
+                .predict(&historical_data)
+                .map_err(|e| XpuOptimizerError::MLOptimizationError(format!("Failed to predict task execution: {}", e)))?;
+
+            log::debug!("ML model prediction for task {}: {:?}", task.id, prediction);
 
             let best_unit = units
                 .iter()
                 .filter_map(|unit| {
                     let unit_guard = unit.lock()
-                        .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))
+                        .map_err(|e| {
+                            log::warn!("Failed to lock processing unit: {}", e);
+                            XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e))
+                        })
                         .ok()?;
                     unit_guard.can_handle_task(task)
+                        .map_err(|e| {
+                            log::warn!("Error checking if unit can handle task: {}", e);
+                            e
+                        })
                         .ok()
                         .and_then(|can_handle| if can_handle { Some(Arc::clone(unit)) } else { None })
                 })
                 .min_by_key(|unit| {
                     unit.lock()
-                        .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))
+                        .map_err(|e| {
+                            log::warn!("Failed to lock processing unit for load check: {}", e);
+                            XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e))
+                        })
                         .and_then(|guard| guard.get_current_load())
                         .map(|load| load.saturating_add(prediction.estimated_duration))
                         .unwrap_or(Duration::MAX)
                 })
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No suitable processing units available".to_string()))?;
+                .ok_or_else(|| {
+                    log::error!("No suitable processing units available for task {}", task.id);
+                    XpuOptimizerError::SchedulingError(format!("No suitable processing units available for task {}", task.id))
+                })?;
 
             best_unit.lock()
-                .map_err(|e| XpuOptimizerError::LockError(e.to_string()))?
-                .assign_task(task)?;
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock best unit: {}", e)))?
+                .assign_task(task)
+                .map_err(|e| {
+                    log::error!("Failed to assign task {} to best unit: {}", task.id, e);
+                    XpuOptimizerError::TaskExecutionError(format!("Failed to assign task: {}", e))
+                })?;
+
+            log::info!("Scheduled task {} on best unit", task.id);
             scheduled_tasks.push((task.clone(), Arc::clone(&best_unit)));
         }
 
@@ -455,6 +496,10 @@ impl TaskScheduler for AIOptimizedScheduler {
 
     fn clone_box(&self) -> Arc<Mutex<dyn TaskScheduler + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
+    }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
     }
 }
 

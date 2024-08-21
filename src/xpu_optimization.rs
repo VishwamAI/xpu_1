@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +20,7 @@ use crate::distributed_memory::DistributedMemoryManager;
 use crate::memory_management::{
     MemoryManager, MemoryStrategy, SimpleMemoryManager, DynamicMemoryManager, MemoryManagerType,
 };
-use crate::ml_models::{MLModel, SimpleRegressionModel};
+use crate::ml_models::{MLModel, SimpleRegressionModel, DefaultMLOptimizer};
 use crate::power_management::{EnergyMonitor, PowerManager, PowerPolicy, PowerState, PowerManagementError, PowerManagementPolicy};
 use crate::profiling::Profiler;
 use crate::resource_monitoring::{ResourceMonitor, XpuStatus, SystemStatus, ProcessingUnitStatus, MemoryStatus, SystemHealth, LoadLevel};
@@ -29,7 +28,6 @@ use crate::scaling::{ScalingAction, ScalingPolicy};
 use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
 use crate::task_scheduling::{
     Scheduler, ProcessingUnitType,
-    RoundRobinScheduler, LoadBalancingScheduler, AIOptimizedScheduler,
     SchedulerType, ProcessingUnitTrait, Task,
 };
 use crate::XpuOptimizerError;
@@ -138,7 +136,11 @@ pub trait MachineLearningOptimizer: Send + Sync {
 
     fn clone_box(&self) -> Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>>;
 
-    fn generate_token(&self) -> Result<String, XpuOptimizerError>;
+    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError>;
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
 }
 
 impl std::fmt::Debug for dyn MachineLearningOptimizer + Send + Sync {
@@ -227,15 +229,8 @@ impl LatencyMonitor {
     }
 }
 
-impl Clone for Scheduler {
-    fn clone(&self) -> Self {
-        match self {
-            Scheduler::RoundRobin(s) => Scheduler::RoundRobin(s.clone()),
-            Scheduler::LoadBalancing(s) => Scheduler::LoadBalancing(s.clone()),
-            Scheduler::AIOptimized(s) => Scheduler::AIOptimized(s.clone()),
-        }
-    }
-}
+// The Clone implementation for Scheduler is already provided elsewhere.
+// Removing this duplicate implementation to avoid conflicts.
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum UserRole {
@@ -302,6 +297,98 @@ pub struct XpuOptimizer {
     pub task_history: Vec<TaskExecutionData>,
     pub profiler: Profiler,
     pub scheduled_tasks: Vec<Task>,
+}
+
+impl std::fmt::Debug for XpuOptimizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XpuOptimizer")
+            .field("task_queue", &self.task_queue)
+            .field("task_graph", &self.task_graph)
+            .field("task_map", &self.task_map)
+            .field("processing_units", &self.processing_units.len())
+            .field("config", &self.config)
+            .field("users", &self.users.len())
+            .field("sessions", &self.sessions.len())
+            .field("node_pool", &self.node_pool)
+            .field("task_history", &self.task_history.len())
+            .field("scheduled_tasks", &self.scheduled_tasks.len())
+            .finish()
+    }
+}
+
+impl XpuOptimizer {
+    pub fn set_num_processing_units(&mut self, num: usize) -> Result<(), XpuOptimizerError> {
+        if num == 0 {
+            return Err(XpuOptimizerError::ConfigError("Number of processing units must be greater than 0".to_string()));
+        }
+        self.config.num_processing_units = num;
+        self.processing_units.clear();
+        for i in 0..num {
+            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match i % 7 {
+                0 => Arc::new(Mutex::new(CPU::new(i, 1.0))),
+                1 => Arc::new(Mutex::new(GPU::new(i, 1.0))),
+                2 => Arc::new(Mutex::new(TPU::new(i, 1.0))),
+                3 => Arc::new(Mutex::new(NPU::new(i, 1.0))),
+                4 => Arc::new(Mutex::new(LPU::new(i, 1.0))),
+                5 => Arc::new(Mutex::new(VPU::new(i, 1.0))),
+                6 => Arc::new(Mutex::new(FPGACore::new(i, 1.0))),
+                _ => unreachable!(),
+            };
+            self.processing_units.push(unit);
+        }
+        Ok(())
+    }
+
+    pub fn set_memory_pool_size(&mut self, size: usize) -> Result<(), XpuOptimizerError> {
+        if size == 0 {
+            return Err(XpuOptimizerError::ConfigError("Memory pool size must be greater than 0".to_string()));
+        }
+        self.config.memory_pool_size = size;
+        let new_memory_manager: Arc<Mutex<dyn MemoryManager + Send + Sync>> = match self.config.memory_manager_type {
+            MemoryManagerType::Simple => Arc::new(Mutex::new(SimpleMemoryManager::new(size))),
+            MemoryManagerType::Dynamic => Arc::new(Mutex::new(DynamicMemoryManager::new(4096, size))),
+        };
+        self.memory_manager = new_memory_manager;
+        Ok(())
+    }
+
+    pub fn set_scheduler_type(&mut self, scheduler_type: SchedulerType) -> Result<(), XpuOptimizerError> {
+        self.config.scheduler_type = scheduler_type.clone();
+        self.scheduler = Scheduler::new(scheduler_type, Some(Arc::clone(&self.ml_model)));
+        Ok(())
+    }
+
+    pub fn set_memory_manager_type(&mut self, manager_type: MemoryManagerType) -> Result<(), XpuOptimizerError> {
+        self.config.memory_manager_type = manager_type;
+        let new_memory_manager: Arc<Mutex<dyn MemoryManager + Send + Sync>> = match manager_type {
+            MemoryManagerType::Simple => Arc::new(Mutex::new(SimpleMemoryManager::new(self.config.memory_pool_size))),
+            MemoryManagerType::Dynamic => Arc::new(Mutex::new(DynamicMemoryManager::new(4096, self.config.memory_pool_size))),
+        };
+        self.memory_manager = new_memory_manager;
+        Ok(())
+    }
+
+    pub fn set_power_management_policy(&mut self, policy: PowerManagementPolicy) -> Result<(), XpuOptimizerError> {
+        self.config.power_management_policy = policy.clone();
+        self.power_manager.set_policy(policy.clone());
+        Ok(())
+    }
+
+    pub fn set_cloud_offloading_policy(&mut self, policy: CloudOffloadingPolicy) -> Result<(), XpuOptimizerError> {
+        self.config.cloud_offloading_policy = policy.clone();
+        let mut cloud_offloader = self.cloud_offloader.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock cloud offloader: {}", e)))?;
+        cloud_offloader.set_policy(policy);
+        Ok(())
+    }
+
+    pub fn set_adaptive_optimization_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
+        self.config.adaptive_optimization_policy = policy.to_string();
+        let mut ml_optimizer = self.ml_optimizer.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML optimizer: {}", e)))?;
+        ml_optimizer.set_policy(policy)?;
+        Ok(())
+    }
 }
 
 
@@ -407,119 +494,12 @@ impl Default for XpuOptimizerConfig {
 
 // SchedulerType is already defined in task_scheduling.rs, so we remove this duplicate definition.
 
-use uuid::Uuid;
+// Removed unused import: use uuid::Uuid;
 
-pub struct DefaultMLOptimizer {
-    model: Arc<Mutex<dyn MLModel + Send + Sync>>,
-}
+// The DefaultMLOptimizer implementation has been removed as it was a duplicate.
+// The original implementation is kept in the ml_models.rs file.
 
-impl DefaultMLOptimizer {
-    pub fn new(model: Option<Arc<Mutex<dyn MLModel + Send + Sync>>>) -> Self {
-        DefaultMLOptimizer {
-            model: model.unwrap_or_else(|| Arc::new(Mutex::new(SimpleRegressionModel::new()))),
-        }
-    }
-}
-
-impl MachineLearningOptimizer for DefaultMLOptimizer {
-    fn optimize(
-        &self,
-        historical_data: &[TaskExecutionData],
-        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
-    ) -> Result<Scheduler, XpuOptimizerError> {
-        self.validate_input(historical_data, processing_units)?;
-        let mut model = self.lock_and_train_model(historical_data)?;
-        let (avg_execution_time, avg_load) = self.calculate_averages(historical_data, processing_units)?;
-        let prediction = self.make_prediction(&mut model, avg_execution_time)?;
-
-        log::debug!(
-            "Average execution time: {:?}, Average load: {}, Predicted duration: {:?}",
-            avg_execution_time, avg_load, prediction.estimated_duration
-        );
-
-        let scheduler = self.choose_strategy(avg_execution_time, avg_load, prediction.estimated_duration);
-        log::info!("Chosen scheduler: {}", scheduler);
-        Ok(scheduler)
-    }
-
-    fn clone_box(&self) -> Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>> {
-        Arc::new(Mutex::new(self.clone()))
-    }
-
-    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
-        Ok(Uuid::new_v4().to_string())
-    }
-}
-
-impl DefaultMLOptimizer {
-    fn validate_input(
-        &self,
-        historical_data: &[TaskExecutionData],
-        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
-    ) -> Result<(), XpuOptimizerError> {
-        if historical_data.is_empty() || processing_units.is_empty() {
-            return Err(XpuOptimizerError::MLOptimizationError("Insufficient data for optimization".to_string()));
-        }
-        Ok(())
-    }
-
-    fn lock_and_train_model<'a>(&'a self, historical_data: &[TaskExecutionData]) -> Result<impl DerefMut<Target = dyn MLModel + Send + Sync> + 'a, XpuOptimizerError> {
-        let mut model = self.model.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock model: {}", e)))?;
-        model.train(historical_data)?;
-        Ok(model)
-    }
-
-    fn calculate_averages(
-        &self,
-        historical_data: &[TaskExecutionData],
-        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
-    ) -> Result<(Duration, f64), XpuOptimizerError> {
-        let total_execution_time: Duration = historical_data.iter().map(|data| data.execution_time).sum();
-        let avg_execution_time = total_execution_time.div_f64(historical_data.len() as f64);
-
-        let avg_load = processing_units.iter()
-            .try_fold(0.0, |acc, unit| -> Result<f64, XpuOptimizerError> {
-                let guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
-                let load = guard.get_load_percentage()?;
-                Ok(acc + load)
-            })
-            .map(|total_load| total_load / processing_units.len() as f64)?;
-
-        Ok((avg_execution_time, avg_load))
-    }
-
-    fn make_prediction(&self, model: &mut impl DerefMut<Target = dyn MLModel + Send + Sync>, avg_execution_time: Duration) -> Result<TaskPrediction, XpuOptimizerError> {
-        let unit_type = ProcessingUnitType::CPU;
-        model.predict(&HistoricalTaskData {
-            task_id: 0,
-            execution_time: avg_execution_time,
-            memory_usage: 0,
-            unit_type: unit_type.clone(),
-            priority: 0,
-        })
-    }
-
-    fn choose_strategy(&self, avg_execution_time: Duration, avg_load: f64, predicted_duration: Duration) -> Scheduler {
-        if avg_execution_time > Duration::from_secs(10) && avg_load > 0.7 {
-            Scheduler::LoadBalancing(LoadBalancingScheduler::new())
-        } else if avg_execution_time <= Duration::from_secs(10) && avg_load <= 0.7 {
-            Scheduler::RoundRobin(RoundRobinScheduler::new())
-        } else if predicted_duration > Duration::from_secs(5) {
-            Scheduler::AIOptimized(AIOptimizedScheduler::new(Arc::clone(&self.model)))
-        } else {
-            Scheduler::RoundRobin(RoundRobinScheduler::new())
-        }
-    }
-}
-
-impl Clone for DefaultMLOptimizer {
-    fn clone(&self) -> Self {
-        DefaultMLOptimizer {
-            model: Arc::clone(&self.model),
-        }
-    }
-}
+// DefaultCloudOffloader is now implemented in src/cloud_offloading.rs
 
 // DefaultCloudOffloader is now implemented in src/cloud_offloading.rs
 
@@ -679,11 +659,15 @@ impl LoadBalancer for DefaultLoadBalancer {
 }
 
 #[derive(Clone)]
-struct DefaultMLModel;
+struct DefaultMLModel {
+    policy: String,
+}
 
 impl DefaultMLModel {
     fn new() -> Self {
-        DefaultMLModel
+        DefaultMLModel {
+            policy: "default".to_string(),
+        }
     }
 }
 
@@ -705,6 +689,17 @@ impl MLModel for DefaultMLModel {
 
     fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
+    }
+
+    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
+        match policy {
+            "default" | "aggressive" | "conservative" => {
+                self.policy = policy.to_string();
+                log::info!("Setting DefaultMLModel policy to: {}", policy);
+                Ok(())
+            },
+            _ => Err(XpuOptimizerError::MLOptimizationError(format!("Unknown policy: {}", policy))),
+        }
     }
 }
 
@@ -905,14 +900,19 @@ impl XpuOptimizer {
     fn execute_tasks(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Executing tasks on respective processing units...");
 
-        let execution_results: Result<Vec<(usize, Duration)>, XpuOptimizerError> = self.scheduled_tasks
-            .iter()
-            .map(|task| {
-                let unit_type = task.unit_type.clone();
-                let unit = self.processing_units.iter()
-                    .find(|u| u.lock().ok().and_then(|guard| guard.get_unit_type().ok()) == Some(unit_type.clone()))
-                    .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(format!("No unit found for task {} of type {:?}", task.id, unit_type)))?;
+        let mut execution_results = Vec::new();
 
+        for task in &self.scheduled_tasks {
+            let unit_type = &task.unit_type;
+            let unit = self.processing_units.iter()
+                .find(|u| {
+                    u.lock().ok()
+                        .and_then(|guard| guard.get_unit_type().ok())
+                        .map_or(false, |ut| &ut == unit_type)
+                })
+                .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(format!("No unit found for task {} of type {:?}", task.id, unit_type)))?;
+
+            let result = {
                 let mut unit_guard = unit.lock()
                     .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
 
@@ -921,19 +921,25 @@ impl XpuOptimizer {
                         unit_guard.assign_task(task)?;
                         Ok((task.id, duration))
                     })
-            })
-            .collect();
+            };
 
-        match execution_results {
-            Ok(results) => {
-                for (task_id, duration) in results {
+            execution_results.push(result);
+        }
+
+        for result in execution_results {
+            match result {
+                Ok((task_id, duration)) => {
                     info!("Task {} completed in {:?}", task_id, duration);
                     self.update_task_history(task_id, duration, true)?;
-                }
-                Ok(())
-            },
-            Err(e) => Err(XpuOptimizerError::TaskExecutionError(format!("Error executing tasks: {}", e)))
+                },
+                Err(e) => {
+                    error!("Error executing task: {}", e);
+                    return Err(XpuOptimizerError::TaskExecutionError(format!("Error executing task: {}", e)));
+                },
+            }
         }
+
+        Ok(())
     }
 
     fn schedule_tasks(&mut self) -> Result<(), XpuOptimizerError> {
@@ -941,9 +947,11 @@ impl XpuOptimizer {
         self.resolve_dependencies()?;
 
         let tasks: Vec<Task> = self.task_queue.iter().cloned().collect();
-        let scheduled_tasks = self.scheduler.lock()
-            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock scheduler: {}", e)))?
-            .schedule(&tasks, &self.processing_units)?;
+        let scheduled_tasks = {
+            let scheduler = self.scheduler.lock()
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock scheduler: {}", e)))?;
+            scheduler.schedule(&tasks, &self.processing_units)?
+        };
 
         self.scheduled_tasks = scheduled_tasks.into_iter().map(|(task, _)| task).collect();
 
@@ -998,7 +1006,7 @@ impl XpuOptimizer {
             .ok_or_else(|| XpuOptimizerError::TaskNotFoundError(task_id))?;
 
         let execution_data = TaskExecutionData {
-            id: task.id,
+            id: task_id,
             execution_time: duration,
             memory_usage: task.memory_requirement,
             unit_type: task.unit_type.clone(),

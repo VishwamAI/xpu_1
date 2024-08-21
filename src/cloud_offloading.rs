@@ -10,22 +10,61 @@ pub enum CloudOffloadingPolicy {
 
 pub trait CloudOffloader: Send + Sync {
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError>;
+    fn set_policy(&mut self, policy: CloudOffloadingPolicy);
 }
 
-#[derive(Default)]
-pub struct DefaultCloudOffloader;
+pub struct DefaultCloudOffloader {
+    policy: CloudOffloadingPolicy,
+}
 
 impl DefaultCloudOffloader {
     pub fn new() -> Self {
-        DefaultCloudOffloader
+        DefaultCloudOffloader {
+            policy: CloudOffloadingPolicy::Default,
+        }
+    }
+
+    pub fn set_policy(&mut self, policy: CloudOffloadingPolicy) {
+        self.policy = policy;
+        log::info!("Cloud offloading policy set to {:?}", policy);
     }
 }
 
+// Removed duplicate implementation of set_policy for CloudOffloader trait
+
 impl CloudOffloader for DefaultCloudOffloader {
+    fn set_policy(&mut self, policy: CloudOffloadingPolicy) {
+        self.policy = policy;
+        log::info!("Cloud offloading policy set to {:?}", policy);
+    }
+
     fn offload_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
-        log::info!("Offloading task {} to cloud", task.id);
+        match self.policy {
+            CloudOffloadingPolicy::Never => {
+                log::info!("Task {} not offloaded due to Never policy", task.id);
+                Ok(())
+            },
+            CloudOffloadingPolicy::Always => {
+                log::info!("Offloading task {} to cloud (Always policy)", task.id);
+                self.perform_offload(task)
+            },
+            CloudOffloadingPolicy::Default => {
+                if task.id % 5 == 0 {
+                    log::info!("Offloading task {} to cloud (Default policy)", task.id);
+                    self.perform_offload(task)
+                } else {
+                    log::info!("Task {} not offloaded (Default policy)", task.id);
+                    Ok(())
+                }
+            },
+        }
+    }
+}
+
+impl DefaultCloudOffloader {
+    fn perform_offload(&self, task: &Task) -> Result<(), XpuOptimizerError> {
         // Simulate potential network errors or other cloud-related issues
-        if task.id % 5 == 0 {
+        if task.id % 7 == 0 {
             log::error!("Failed to offload task {} due to simulated network error", task.id);
             Err(XpuOptimizerError::CloudOffloadingError(format!("Failed to offload task {}", task.id)))
         } else {

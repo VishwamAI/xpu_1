@@ -78,8 +78,8 @@ fn test_configure_xpu_manager() {
             "memory_pool_size": 2048,
             "scheduler_type": "LoadBalancing",
             "memory_manager_type": "Dynamic",
-            "power_management_policy": "adaptive",
-            "cloud_offloading_policy": "threshold-based",
+            "power_management_policy": "Aggressive",
+            "cloud_offloading_policy": "Always",
             "adaptive_optimization_policy": "ml-driven"
         }
         "#,
@@ -88,6 +88,18 @@ fn test_configure_xpu_manager() {
 
     let result = configure_xpu_manager(config_path.to_str().unwrap());
     assert!(result.is_ok());
+
+    let optimizer = result.unwrap();
+    assert_eq!(optimizer.config.num_processing_units, 8);
+    assert_eq!(optimizer.config.memory_pool_size, 2048);
+    assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
+    assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
+    assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Aggressive));
+    assert!(matches!(optimizer.config.cloud_offloading_policy, CloudOffloadingPolicy::Always));
+    assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
+
+    assert_eq!(optimizer.processing_units.len(), 8);
+    assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
 }
 
 #[test]

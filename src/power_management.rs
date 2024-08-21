@@ -17,6 +17,22 @@ pub struct PowerManager {
 }
 
 impl PowerManager {
+    pub fn set_policy(&mut self, policy: PowerManagementPolicy) {
+        self.power_policy = match policy {
+            PowerManagementPolicy::Default => PowerPolicy::default(),
+            PowerManagementPolicy::Aggressive => PowerPolicy {
+                low_power_threshold: 0.2,
+                high_power_threshold: 0.6,
+            },
+            PowerManagementPolicy::Conservative => PowerPolicy {
+                low_power_threshold: 0.4,
+                high_power_threshold: 0.8,
+            },
+        };
+    }
+}
+
+impl PowerManager {
     pub fn new() -> Self {
         PowerManager {
             current_power_state: PowerState::Normal,

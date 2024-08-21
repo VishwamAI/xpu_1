@@ -1,6 +1,7 @@
 use crate::task_data::{HistoricalTaskData, TaskExecutionData, TaskPrediction};
-use crate::task_scheduling::ProcessingUnitType;
+use crate::task_scheduling::{ProcessingUnitType, ProcessingUnitTrait, Scheduler, AIOptimizedScheduler};
 use crate::XpuOptimizerError;
+use crate::xpu_optimization::MachineLearningOptimizer;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 
@@ -8,9 +9,11 @@ pub trait MLModel: Send + Sync {
     fn train(&mut self, historical_data: &[TaskExecutionData]) -> Result<(), XpuOptimizerError>;
     fn predict(&self, task_data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError>;
     fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>>;
+    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError>;
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
 }
-
-// Remove duplicate Clone implementation
 
 impl std::fmt::Debug for dyn MLModel + Send + Sync {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -21,12 +24,14 @@ impl std::fmt::Debug for dyn MLModel + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SimpleRegressionModel {
     coefficients: Vec<f64>,
+    policy: String,
 }
 
 impl SimpleRegressionModel {
     pub fn new() -> Self {
         SimpleRegressionModel {
             coefficients: vec![0.0; 4], // Assuming 4 features: execution_time, memory_usage, processing_unit_type, priority
+            policy: "default".to_string(),
         }
     }
 
@@ -124,8 +129,81 @@ impl MLModel for SimpleRegressionModel {
     fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>> {
         Arc::new(Mutex::new(self.clone()))
     }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
+        self.policy = policy.to_string();
+        log::info!("Setting ML optimization policy to: {}", policy);
+        match policy {
+            "default" => {
+                // Use default settings
+            },
+            "aggressive" => {
+                // Implement more aggressive learning rate or more iterations
+            },
+            "conservative" => {
+                // Implement more conservative learning rate or fewer iterations
+            },
+            _ => return Err(XpuOptimizerError::MLOptimizationError(format!("Unknown policy: {}", policy))),
+        }
+        Ok(())
+    }
 }
 
-// Removed manual Clone implementation as it's already derived
+#[derive(Clone)]
+pub struct DefaultMLOptimizer {
+    ml_model: Arc<Mutex<dyn MLModel + Send + Sync>>,
+    policy: String,
+}
 
-// The Clone implementation is already derived using #[derive(Debug, Clone)]
+impl DefaultMLOptimizer {
+    pub fn new(ml_model: Option<Arc<Mutex<dyn MLModel + Send + Sync>>>) -> Self {
+        DefaultMLOptimizer {
+            ml_model: ml_model.unwrap_or_else(|| Arc::new(Mutex::new(SimpleRegressionModel::new()))),
+            policy: "default".to_string(),
+        }
+    }
+}
+
+impl MachineLearningOptimizer for DefaultMLOptimizer {
+    fn optimize(
+        &self,
+        historical_data: &[TaskExecutionData],
+        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
+    ) -> Result<Scheduler, XpuOptimizerError> {
+        let mut model = self.ml_model.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?;
+
+        model.train(historical_data)
+            .map_err(|e| XpuOptimizerError::MLOptimizationError(format!("Failed to train model: {}", e)))?;
+
+        log::info!("ML model trained successfully with {} historical data points", historical_data.len());
+
+        // Here we could use processing_units to make more informed decisions
+        // For now, we're just creating a new AIOptimizedScheduler
+        let scheduler = Scheduler::AIOptimized(AIOptimizedScheduler::new(Arc::clone(&self.ml_model)));
+
+        log::info!("Created new AIOptimizedScheduler based on trained model");
+
+        Ok(scheduler)
+    }
+
+    fn clone_box(&self) -> Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+
+    fn generate_token(&self) -> Result<String, XpuOptimizerError> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
+        self.policy = policy.to_string();
+        log::info!("Setting DefaultMLOptimizer policy to: {}", policy);
+        let mut model = self.ml_model.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?;
+        model.set_policy(policy)
+    }
+}

@@ -2,8 +2,6 @@ use crate::task_scheduling::{ProcessingUnitType, Task, ProcessingUnitTrait};
 use crate::power_management::{PowerState, EnergyProfile, PowerManagementError};
 use crate::XpuOptimizerError;
 use std::time::Duration;
-use std::sync::{Arc, Mutex};
-use std::any::Any;
 
 #[derive(Debug, Clone)]
 pub struct TPU {
