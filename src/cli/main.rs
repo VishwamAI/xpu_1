@@ -143,10 +143,12 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
         None => CloudOffloadingPolicy::Default,
     };
 
-    let adaptive_optimization_policy = config["adaptive_optimization_policy"]
-        .as_str()
-        .unwrap_or("default")
-        .to_string();
+    let adaptive_optimization_policy = match config["adaptive_optimization_policy"].as_str() {
+        Some("default") => "default".to_string(),
+        Some("ml-driven") => "ml-driven".to_string(),
+        Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid adaptive_optimization_policy: {}", s))),
+        None => "default".to_string(),
+    };
 
     Ok(XpuOptimizerConfig {
         num_processing_units,
@@ -312,14 +314,20 @@ pub fn stop_xpu_manager() -> Result<(), XpuOptimizerError> {
     Ok(())
 }
 
-pub fn configure_xpu_manager(config_file: &str) -> Result<(), XpuOptimizerError> {
+pub fn configure_xpu_manager(config_file: &str) -> Result<XpuOptimizer, XpuOptimizerError> {
     let config = parse_config_file(config_file)?;
-    // TODO: Implement configuration application logic
-    // For now, we'll just print the parsed configuration
-    println!("Parsed configuration:");
+
+    println!("Applying configuration:");
     println!("  Number of processing units: {}", config.num_processing_units);
     println!("  Memory pool size: {}", config.memory_pool_size);
     println!("  Scheduler type: {:?}", config.scheduler_type);
     println!("  Memory manager type: {:?}", config.memory_manager_type);
-    Ok(())
+    println!("  Power management policy: {:?}", config.power_management_policy);
+    println!("  Cloud offloading policy: {:?}", config.cloud_offloading_policy);
+    println!("  Adaptive optimization policy: {}", config.adaptive_optimization_policy);
+
+    let optimizer = XpuOptimizer::new(config)?;
+
+    println!("Configuration applied successfully.");
+    Ok(optimizer)
 }
