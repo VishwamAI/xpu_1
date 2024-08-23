@@ -135,10 +135,10 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
         None => PowerManagementPolicy::Default,
     };
 
-    let cloud_offloading_policy = match config["cloud_offloading_policy"].as_str() {
-        Some("default") => CloudOffloadingPolicy::Default,
-        Some("always") => CloudOffloadingPolicy::Always,
-        Some("never") => CloudOffloadingPolicy::Never,
+    let cloud_offloading_policy = match config["cloud_offloading_policy"].as_str().map(|s| s.to_lowercase()) {
+        Some(s) if s == "default" => CloudOffloadingPolicy::Default,
+        Some(s) if s == "always" => CloudOffloadingPolicy::Always,
+        Some(s) if s == "never" => CloudOffloadingPolicy::Never,
         Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid cloud_offloading_policy: {}", s))),
         None => CloudOffloadingPolicy::Default,
     };
