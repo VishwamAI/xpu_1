@@ -256,7 +256,6 @@ pub struct User {
 }
 
 pub struct Role {
-    name: String,
     permissions: Vec<Permission>,
 }
 
@@ -443,23 +442,6 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn disconnect_from_job_scheduler(&self) -> Result<(), XpuOptimizerError> {
-        info!("Disconnecting from job scheduler...");
-        // TODO: Implement actual disconnection logic
-        Ok(())
-    }
-
-    fn disconnect_from_cloud_services(&self) -> Result<(), XpuOptimizerError> {
-        info!("Disconnecting from cloud services...");
-        // TODO: Implement actual disconnection logic
-        Ok(())
-    }
-
-    fn disconnect_from_cluster(&self) -> Result<(), XpuOptimizerError> {
-        info!("Disconnecting from cluster...");
-        // TODO: Implement actual disconnection logic
-        Ok(())
-    }
 }
 
 pub struct Session {
@@ -658,50 +640,7 @@ impl LoadBalancer for DefaultLoadBalancer {
     }
 }
 
-#[derive(Clone)]
-struct DefaultMLModel {
-    policy: String,
-}
 
-impl DefaultMLModel {
-    fn new() -> Self {
-        DefaultMLModel {
-            policy: "default".to_string(),
-        }
-    }
-}
-
-impl MLModel for DefaultMLModel {
-    fn train(&mut self, _historical_data: &[TaskExecutionData]) -> Result<(), XpuOptimizerError> {
-        // Placeholder implementation
-        Ok(())
-    }
-
-    fn predict(&self, _task_data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError> {
-        // Placeholder implementation
-        Ok(TaskPrediction {
-            task_id: 0,
-            estimated_duration: Duration::from_secs(1),
-            estimated_resource_usage: 100,
-            recommended_processing_unit: ProcessingUnitType::CPU,
-        })
-    }
-
-    fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>> {
-        Arc::new(Mutex::new(self.clone()))
-    }
-
-    fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
-        match policy {
-            "default" | "aggressive" | "conservative" => {
-                self.policy = policy.to_string();
-                log::info!("Setting DefaultMLModel policy to: {}", policy);
-                Ok(())
-            },
-            _ => Err(XpuOptimizerError::MLOptimizationError(format!("Unknown policy: {}", policy))),
-        }
-    }
-}
 
 use crate::cloud_offloading::DefaultCloudOffloader;
 
@@ -1350,51 +1289,7 @@ impl XpuOptimizer {
             .collect()
     }
 
-    fn integrate_cuda(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement CUDA integration for GPU management
-        info!("Integrating CUDA for GPU management");
-        Ok(())
-    }
-
-    fn integrate_tensorflow(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement TensorFlow integration for AI model execution
-        info!("Integrating TensorFlow for AI model execution");
-        Ok(())
-    }
-
-    fn integrate_pytorch(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement PyTorch integration for AI model execution
-        info!("Integrating PyTorch for AI model execution");
-        Ok(())
-    }
-
-    fn connect_slurm(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement SLURM connection for job scheduling
-        info!("Connecting to SLURM job scheduler");
-        Ok(())
-    }
-
-    async fn connect_kubernetes(&mut self) -> Result<(), XpuOptimizerError> {
-        #[cfg(feature = "kubernetes_support")]
-        {
-            info!("Connecting to Kubernetes cluster");
-            match kube::Client::try_default().await {
-                Ok(client) => {
-                    self.kubernetes_client = Some(client);
-                    info!("Successfully connected to Kubernetes cluster");
-                    Ok(())
-                }
-                Err(e) => Err(XpuOptimizerError::KubernetesInitializationError(
-                    e.to_string(),
-                )),
-            }
-        }
-        #[cfg(not(feature = "kubernetes_support"))]
-        {
-            info!("Kubernetes support is not enabled");
-            Ok(())
-        }
-    }
+    // Removed unused functions: integrate_cuda, integrate_tensorflow, integrate_pytorch, connect_slurm, and connect_kubernetes
 
     fn add_user(
         &mut self,
@@ -1422,11 +1317,7 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn connect_mesos(&mut self) -> Result<(), XpuOptimizerError> {
-        // TODO: Implement Apache Mesos connection for resource management
-        info!("Connecting to Apache Mesos cluster");
-        Ok(())
-    }
+    // Removed unused function connect_mesos
 
     fn remove_user(&mut self, username: &str) -> Result<(), XpuOptimizerError> {
         if self.users.remove(username).is_none() {

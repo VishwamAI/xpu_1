@@ -10,10 +10,18 @@ This project provides a basic framework for managing tasks, memory, and power in
 - Task Scheduling: Prioritize and schedule tasks across multiple processing units.
 - Memory Management: Allocate and manage memory for tasks.
 - Power Management: Optimize power consumption based on system load.
-- Inspired by intel xpu devlopment benchmarks and devlopment
+- Cloud Offloading: Efficiently manage workload distribution between local and cloud resources.
+- Adaptive Optimization: Implement ML-driven strategies for system optimization.
+- Inspired by Intel XPU development benchmarks and development
 
   ![image](https://github.com/user-attachments/assets/3a636d17-d4e4-4fb8-a7b7-2ed70257ab33)
 
+## Recent Updates
+
+- Improved power management policy handling with case-insensitive input.
+- Fixed `test_configure_xpu_manager` test failure related to power management policy configuration.
+- Enhanced error handling and logging throughout the codebase.
+- Implemented cloud offloading and adaptive optimization features.
 
 ## Installation
 
@@ -21,8 +29,8 @@ To use XPU Manager Rust, you need to have Rust installed on your system. If you 
 
 1. Clone the repository:
    ```
-   git clone https://https://github.com/VishwamAI/xpu_1.git
-   cd xpu_manager_rust
+   git clone https://github.com/VishwamAI/xpu_1.git
+   cd xpu_1
    ```
 
 2. Build the project:
@@ -45,13 +53,12 @@ This will execute a sample scenario demonstrating task scheduling, memory alloca
 Here's a basic example of how to use the XPU Manager Rust components:
 
 ```rust
-use xpu_manager_rust::{TaskScheduler, Task, MemoryManager, PowerManager};
+use xpu_manager_rust::{XpuOptimizer, XpuOptimizerConfig, Task};
 use std::time::Duration;
 
-fn main() {
-    let mut scheduler = TaskScheduler::new(4);
-    let mut memory_manager = MemoryManager::new(1024);
-    let mut power_manager = PowerManager::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = XpuOptimizerConfig::default();
+    let mut optimizer = XpuOptimizer::new(config)?;
 
     let task = Task {
         id: 1,
@@ -60,11 +67,10 @@ fn main() {
         memory_requirement: 200,
     };
 
-    scheduler.add_task(task);
-    memory_manager.allocate_for_tasks(&scheduler.tasks).unwrap();
-    scheduler.schedule();
+    optimizer.add_task(task)?;
+    optimizer.run()?;
 
-    power_manager.optimize_power(0.6);
+    Ok(())
 }
 ```
 

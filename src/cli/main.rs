@@ -12,7 +12,7 @@ use std::{fs, collections::HashMap};
 use serde_json;
 use log;
 
-fn main() -> Result<(), XpuOptimizerError> {
+pub fn run_cli() -> Result<(), XpuOptimizerError> {
     let matches = App::new("XPU CLI")
         .version("0.1.0")
         .author("XPU Team")
@@ -127,10 +127,10 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
         None => return Err(XpuOptimizerError::ConfigError("Missing memory_manager_type".to_string())),
     };
 
-    let power_management_policy = match config["power_management_policy"].as_str() {
-        Some("default") => PowerManagementPolicy::Default,
-        Some("aggressive") => PowerManagementPolicy::Aggressive,
-        Some("conservative") => PowerManagementPolicy::Conservative,
+    let power_management_policy = match config["power_management_policy"].as_str().map(|s| s.to_lowercase()) {
+        Some(s) if s == "default" => PowerManagementPolicy::Default,
+        Some(s) if s == "aggressive" => PowerManagementPolicy::Aggressive,
+        Some(s) if s == "conservative" => PowerManagementPolicy::Conservative,
         Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid power_management_policy: {}", s))),
         None => PowerManagementPolicy::Default,
     };

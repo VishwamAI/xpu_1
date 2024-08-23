@@ -25,3 +25,6 @@ tempfile = "3.2"
 [[bench]]
 name = "benchmark"
 harness = false
+
+[features]
+kubernetes_support = []
