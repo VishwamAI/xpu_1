@@ -1291,7 +1291,7 @@ impl XpuOptimizer {
 
     // Removed unused functions: integrate_cuda, integrate_tensorflow, integrate_pytorch, connect_slurm, and connect_kubernetes
 
-    fn add_user(
+    pub fn add_user(
         &mut self,
         username: String,
         password: String,
@@ -1318,6 +1318,31 @@ impl XpuOptimizer {
     }
 
     // Removed unused function connect_mesos
+
+    pub fn authenticate_user(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<String, XpuOptimizerError> {
+        let user = self.users
+            .get(username)
+            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+
+        let parsed_hash = PasswordHash::new(&user.password_hash)
+            .map_err(|e| XpuOptimizerError::AuthenticationError(e.to_string()))?;
+
+        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+            let token = self.generate_jwt_token(username, &user.role)?;
+            let session = Session {
+                user_id: username.to_string(),
+                expiration: Utc::now() + chrono::Duration::hours(24),
+            };
+            self.sessions.insert(token.clone(), session);
+            Ok(token)
+        } else {
+            Err(XpuOptimizerError::AuthenticationError("Invalid password".to_string()))
+        }
+    }
 
     fn remove_user(&mut self, username: &str) -> Result<(), XpuOptimizerError> {
         if self.users.remove(username).is_none() {
