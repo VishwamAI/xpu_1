@@ -110,3 +110,14 @@ pub enum XpuOptimizerError {
     #[error("Initialization error: {0}")]
     InitializationError(String),
 }
+
+impl XpuOptimizerError {
+    pub fn task_id(&self) -> Option<u32> {
+        match self {
+            XpuOptimizerError::TaskNotFoundError(id) => Some(*id as u32),
+            XpuOptimizerError::TaskExecutionError(_) => None, // Assuming task ID is not available in the error message
+            XpuOptimizerError::TaskDistributionError(_) => None, // Assuming task ID is not available in the error message
+            _ => None,
+        }
+    }
+}
