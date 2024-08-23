@@ -894,12 +894,12 @@ impl XpuOptimizer {
             match result {
                 Ok((task_id, duration)) => {
                     info!("Task {} completed in {:?}", task_id, duration);
-                    self.update_task_history(task_id, duration, true)?;
+                    self.update_task_history(task_id.try_into().unwrap(), duration, true)?;
                 },
                 Err(e) => {
                     error!("Error executing task: {}", e);
                     // Continue execution for other tasks instead of returning immediately
-                    self.update_task_history(e.task_id().unwrap_or_default(), Duration::from_secs(0), false)?;
+                    self.update_task_history(e.task_id().unwrap_or_default().try_into().unwrap(), Duration::from_secs(0), false)?;
                 },
             }
         }
