@@ -772,6 +772,13 @@ impl XpuOptimizer {
             MemoryManagerType::Dynamic => MemoryStrategy::Dynamic(DynamicMemoryManager::new(4096, config.memory_pool_size)),
         };
 
+        // Set a fixed jwt_secret for testing purposes
+        let jwt_secret = if cfg!(test) {
+            vec![0; 32] // Fixed 32-byte array for testing
+        } else {
+            rand::thread_rng().gen::<[u8; 32]>().to_vec()
+        };
+
         Ok(XpuOptimizer {
             task_queue: VecDeque::new(),
             task_graph: DiGraph::new(),
@@ -782,7 +789,7 @@ impl XpuOptimizer {
             memory_manager,
             config,
             users: HashMap::new(),
-            jwt_secret: rand::thread_rng().gen::<[u8; 32]>().to_vec(),
+            jwt_secret,
             sessions: HashMap::new(),
             ml_optimizer,
             cloud_offloader,
@@ -1409,7 +1416,7 @@ impl XpuOptimizer {
         }
     }
 
-    fn add_user(
+    pub fn add_user(
         &mut self,
         username: String,
         password: String,
@@ -1451,7 +1458,7 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn authenticate_user(
+    pub fn authenticate_user(
         &mut self,
         username: &str,
         password: &str,
