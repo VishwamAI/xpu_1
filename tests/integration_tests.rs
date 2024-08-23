@@ -9,6 +9,11 @@ use xpu_manager_rust::{
     cloud_offloading::CloudOffloadingPolicy,
 };
 
+fn create_test_user_and_authenticate(optimizer: &mut XpuOptimizer) -> Result<String, XpuOptimizerError> {
+    optimizer.add_user("test_user".to_string(), "test_password".to_string(), xpu_manager_rust::xpu_optimization::UserRole::User)?;
+    optimizer.authenticate_user("test_user", "test_password")
+}
+
 #[test]
 fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError> {
     let config = XpuOptimizerConfig {
@@ -21,6 +26,8 @@ fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError>
         adaptive_optimization_policy: "default".to_string(),
     };
     let mut optimizer = XpuOptimizer::new(config)?;
+
+    let token = create_test_user_and_authenticate(&mut optimizer)?;
 
     let tasks = vec![
         Task::new(
@@ -44,7 +51,7 @@ fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError>
     ];
 
     for task in &tasks {
-        optimizer.add_task(task.clone(), "dummy_token")?;
+        optimizer.add_task(task.clone(), &token)?;
     }
 
     assert_eq!(optimizer.task_queue.len(), 2);
@@ -93,6 +100,8 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
     };
     let mut optimizer = XpuOptimizer::new(config)?;
 
+    let token = create_test_user_and_authenticate(&mut optimizer)?;
+
     let tasks = vec![
         Task::new(
             1,
@@ -124,7 +133,7 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
     ];
 
     for task in tasks {
-        optimizer.add_task(task, "dummy_token")?;
+        optimizer.add_task(task, &token)?;
     }
 
     let memory_manager = optimizer.memory_manager.lock().map_err(|_| XpuOptimizerError::LockError("Failed to lock memory manager".to_string()))?;
@@ -142,6 +151,32 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
     let system_load = 0.6;
     optimizer.power_manager.optimize_power(system_load)?;
     assert!(matches!(optimizer.power_manager.get_power_state(), PowerState::Normal));
+
+    Ok(())
+}
+
+#[test]
+fn test_token_expiration() -> Result<(), XpuOptimizerError> {
+    let config = XpuOptimizerConfig::default();
+    let mut optimizer = XpuOptimizer::new(config)?;
+
+    let token = create_test_user_and_authenticate(&mut optimizer)?;
+
+    // Simulate token expiration
+    optimizer.sessions.clear();
+
+    let task = Task::new(
+        1,
+        1,
+        vec![],
+        Duration::from_secs(1),
+        100,
+        false,
+        ProcessingUnitType::CPU,
+    );
+
+    let result = optimizer.add_task(task, &token);
+    assert!(matches!(result, Err(XpuOptimizerError::SessionNotFoundError)));
 
     Ok(())
 }
