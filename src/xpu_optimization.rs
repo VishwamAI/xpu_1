@@ -1513,6 +1513,16 @@ impl XpuOptimizer {
 
     fn get_user_from_token(&self, token: &str) -> Result<User, XpuOptimizerError> {
         let username = self.validate_jwt_token(token)?;
+
+        // Check if the token has expired
+        if let Some(session) = self.sessions.get(token) {
+            if Utc::now() > session.expiration {
+                return Err(XpuOptimizerError::InvalidSessionError);
+            }
+        } else {
+            return Err(XpuOptimizerError::SessionNotFoundError);
+        }
+
         self.users
             .get(&username)
             .cloned()
