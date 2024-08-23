@@ -661,7 +661,8 @@ impl XpuOptimizer {
 
         let default_processing_power = 1.0;
 
-        for (i, unit_type) in unit_types.iter().cycle().take(config.num_processing_units).enumerate() {
+        // Ensure at least one of each processing unit type is created
+        for (i, unit_type) in unit_types.iter().enumerate() {
             let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
                 ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(i, default_processing_power))),
                 ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(i, default_processing_power))),
@@ -673,6 +674,23 @@ impl XpuOptimizer {
             };
             processing_units.push(unit);
         }
+
+        // Add remaining processing units to reach the configured number
+        for i in unit_types.len()..config.num_processing_units {
+            let unit_type = &unit_types[i % unit_types.len()];
+            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(i, default_processing_power))),
+                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(i, default_processing_power))),
+                ProcessingUnitType::TPU => Arc::new(Mutex::new(TPU::new(i, default_processing_power))),
+                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(i, default_processing_power))),
+                ProcessingUnitType::LPU => Arc::new(Mutex::new(LPU::new(i, default_processing_power))),
+                ProcessingUnitType::VPU => Arc::new(Mutex::new(VPU::new(i, default_processing_power))),
+                ProcessingUnitType::FPGA => Arc::new(Mutex::new(FPGACore::new(i, default_processing_power))),
+            };
+            processing_units.push(unit);
+        }
+
+        info!("Created {} processing units", processing_units.len());
 
         let ml_model: Arc<Mutex<dyn MLModel + Send + Sync>> = Arc::new(Mutex::new(SimpleRegressionModel::new()));
         let ml_optimizer: Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>> = Arc::new(Mutex::new(DefaultMLOptimizer::new(Some(Arc::clone(&ml_model)))));
@@ -849,7 +867,10 @@ impl XpuOptimizer {
                         .and_then(|guard| guard.get_unit_type().ok())
                         .map_or(false, |ut| &ut == unit_type)
                 })
-                .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(format!("No unit found for task {} of type {:?}", task.id, unit_type)))?;
+                .ok_or_else(|| {
+                    warn!("No processing unit found for task {} of type {:?}", task.id, unit_type);
+                    XpuOptimizerError::ProcessingUnitNotFound(format!("No unit found for task {} of type {:?}", task.id, unit_type))
+                })?;
 
             let result = {
                 let mut unit_guard = unit.lock()
@@ -859,6 +880,10 @@ impl XpuOptimizer {
                     .and_then(|duration| {
                         unit_guard.assign_task(task)?;
                         Ok((task.id, duration))
+                    })
+                    .map_err(|e| {
+                        warn!("Error executing task {} on unit {:?}: {}", task.id, unit_type, e);
+                        e
                     })
             };
 
@@ -873,7 +898,8 @@ impl XpuOptimizer {
                 },
                 Err(e) => {
                     error!("Error executing task: {}", e);
-                    return Err(XpuOptimizerError::TaskExecutionError(format!("Error executing task: {}", e)));
+                    // Continue execution for other tasks instead of returning immediately
+                    self.update_task_history(e.task_id(), Duration::from_secs(0), false)?;
                 },
             }
         }
@@ -889,8 +915,18 @@ impl XpuOptimizer {
         let scheduled_tasks = {
             let scheduler = self.scheduler.lock()
                 .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock scheduler: {}", e)))?;
-            scheduler.schedule(&tasks, &self.processing_units)?
+            match scheduler.schedule(&tasks, &self.processing_units) {
+                Ok(scheduled) => scheduled,
+                Err(e) => {
+                    error!("Failed to schedule tasks: {}", e);
+                    return Err(XpuOptimizerError::SchedulingError(format!("Task scheduling failed: {}", e)));
+                }
+            }
         };
+
+        if scheduled_tasks.len() != tasks.len() {
+            warn!("Not all tasks were scheduled. Scheduled: {}, Total: {}", scheduled_tasks.len(), tasks.len());
+        }
 
         self.scheduled_tasks = scheduled_tasks.into_iter().map(|(task, _)| task).collect();
 
