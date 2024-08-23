@@ -127,9 +127,13 @@ fn test_xpu_optimizer_initialization() -> Result<(), Box<dyn std::error::Error>>
     let config = XpuOptimizerConfig::default();
     let optimizer = XpuOptimizer::new(config.clone())?;
 
-    assert_eq!(optimizer.processing_units.len(), config.num_processing_units);
-    assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)));
-    assert_eq!(optimizer.task_queue.len(), 0);
+    assert_eq!(optimizer.processing_units.len(), 4, "Expected 4 processing units");
+    assert_eq!(config.num_processing_units, 4, "Default config should have 4 processing units");
+    assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)), "Default scheduler should be RoundRobin");
+    assert_eq!(optimizer.task_queue.len(), 0, "Task queue should be empty initially");
+    assert_eq!(config.memory_pool_size, 1024 * 1024 * 1024, "Default memory pool size should be 1GB");
+    assert!(matches!(config.memory_manager_type, MemoryManagerType::Simple), "Default memory manager type should be Simple");
+    assert!(matches!(config.power_management_policy, PowerManagementPolicy::Default), "Default power management policy should be Default");
 
     Ok(())
 }
