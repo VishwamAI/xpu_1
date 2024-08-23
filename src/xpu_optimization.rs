@@ -899,7 +899,7 @@ impl XpuOptimizer {
                 Err(e) => {
                     error!("Error executing task: {}", e);
                     // Continue execution for other tasks instead of returning immediately
-                    self.update_task_history(e.task_id(), Duration::from_secs(0), false)?;
+                    self.update_task_history(e.task_id().unwrap_or_default(), Duration::from_secs(0), false)?;
                 },
             }
         }
