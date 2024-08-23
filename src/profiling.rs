@@ -46,3 +46,46 @@ impl Profiler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn test_task_profiling() {
+        let mut profiler = Profiler::new();
+        let start_time = profiler.start_task();
+        thread::sleep(Duration::from_millis(100));
+        profiler.end_task(1, start_time);
+
+        let task_timing = profiler.get_task_timing(1).unwrap();
+        assert!(task_timing.as_millis() >= 100);
+    }
+
+    #[test]
+    fn test_unit_utilization() {
+        let mut profiler = Profiler::new();
+        profiler.update_unit_utilization(1, 0.75);
+        assert_eq!(profiler.get_unit_utilization(1), Some(&0.75));
+        assert_eq!(profiler.get_unit_utilization(2), None);
+    }
+
+    #[test]
+    fn test_memory_usage() {
+        let mut profiler = Profiler::new();
+        profiler.record_memory_usage(1000);
+        profiler.record_memory_usage(2000);
+        profiler.record_memory_usage(3000);
+
+        assert_eq!(profiler.get_average_memory_usage(), Some(2000.0));
+    }
+
+    #[test]
+    fn test_empty_profiler() {
+        let profiler = Profiler::new();
+        assert_eq!(profiler.get_task_timing(1), None);
+        assert_eq!(profiler.get_unit_utilization(1), None);
+        assert_eq!(profiler.get_average_memory_usage(), None);
+    }
+}

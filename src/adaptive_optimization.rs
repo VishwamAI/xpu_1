@@ -32,10 +32,10 @@ impl AdaptiveOptimizer {
         );
 
         Ok(OptimizationParams {
-            load_balance_threshold,
-            prediction_weight,
-            task_priority_weight,
-            power_efficiency_factor,
+            load_balance_threshold: load_balance_threshold as f64,
+            prediction_weight: prediction_weight as f64,
+            task_priority_weight: task_priority_weight as f64,
+            power_efficiency_factor: power_efficiency_factor as f64,
         })
     }
 }

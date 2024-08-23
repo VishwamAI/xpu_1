@@ -11,16 +11,30 @@ pub enum MemoryError {
     SizeNotFound,
 }
 
-pub struct MemoryManager {
-    memory_pool: std::collections::BTreeMap<usize, Vec<usize>>,
+pub trait MemoryManager {
+    fn allocate(&mut self, size: usize) -> Result<(), MemoryError>;
+    fn deallocate(&mut self, size: usize) -> Result<(), MemoryError>;
+    fn get_available_memory(&self) -> usize;
+    fn allocate_for_tasks(&mut self, tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError>;
+    fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MemoryManagerType {
+    Simple,
+    Dynamic,
+}
+
+pub struct SimpleMemoryManager {
+    memory_pool: BTreeMap<usize, Vec<usize>>,
     total_memory: usize,
     allocated_memory: usize,
     fragmentation_threshold: f32,
 }
 
-impl MemoryManager {
+impl SimpleMemoryManager {
     pub fn new(total_memory: usize) -> Self {
-        MemoryManager {
+        SimpleMemoryManager {
             memory_pool: BTreeMap::new(),
             total_memory,
             allocated_memory: 0,
@@ -28,9 +42,34 @@ impl MemoryManager {
         }
     }
 
-    pub fn allocate(&mut self, size: usize) -> Result<(), String> {
+    fn fragmentation_level(&self) -> f32 {
+        let free_blocks: usize = self.memory_pool.values().map(|blocks| blocks.len()).sum();
+        free_blocks as f32 / self.total_memory as f32
+    }
+
+    fn defragment(&mut self) {
+        let mut new_pool: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        let mut current_address = 0;
+
+        for (size, blocks) in self.memory_pool.iter() {
+            for _ in blocks {
+                new_pool.entry(*size).or_default().push(current_address);
+                current_address += size;
+            }
+        }
+
+        self.memory_pool = new_pool;
+    }
+
+    pub fn get_fragmentation_percentage(&self) -> f32 {
+        self.fragmentation_level() * 100.0
+    }
+}
+
+impl MemoryManager for SimpleMemoryManager {
+    fn allocate(&mut self, size: usize) -> Result<(), MemoryError> {
         if self.allocated_memory + size > self.total_memory {
-            return Err("Not enough memory available".to_string());
+            return Err(MemoryError::InsufficientMemory);
         }
 
         let mut allocated = false;
@@ -64,35 +103,29 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub fn deallocate(&mut self, size: usize) -> Result<(), String> {
+    fn deallocate(&mut self, size: usize) -> Result<(), MemoryError> {
         if let Some(blocks) = self.memory_pool.get_mut(&size) {
             if blocks.pop().is_some() {
                 self.allocated_memory = self.allocated_memory.saturating_sub(size);
                 Ok(())
             } else {
-                Err("Memory block not found".to_string())
+                Err(MemoryError::BlockNotFound)
             }
         } else {
-            Err("Memory block size not found".to_string())
+            Err(MemoryError::SizeNotFound)
         }
     }
 
-    pub fn get_available_memory(&self) -> usize {
+    fn get_available_memory(&self) -> usize {
         self.total_memory - self.allocated_memory
     }
 
-    pub fn allocate_for_tasks(
-        &mut self,
-        tasks: &[crate::task_scheduling::Task],
-    ) -> Result<(), String> {
+    fn allocate_for_tasks(&mut self, tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
         let total_required: usize = tasks.iter().map(|task| task.memory_requirement).sum();
         let available_memory = self.get_available_memory();
 
         if total_required > available_memory {
-            return Err(format!(
-                "Not enough memory for all tasks. Available: {} bytes, Required: {} bytes",
-                available_memory, total_required
-            ));
+            return Err(MemoryError::InsufficientMemory);
         }
 
         for task in tasks {
@@ -102,36 +135,130 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub fn deallocate_completed_tasks(
-        &mut self,
-        completed_tasks: &[crate::task_scheduling::Task],
-    ) -> Result<(), String> {
+    fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
         for task in completed_tasks {
             self.deallocate(task.memory_requirement)?;
         }
         Ok(())
     }
+}
 
-    fn fragmentation_level(&self) -> f32 {
-        let free_blocks: usize = self.memory_pool.values().map(|blocks| blocks.len()).sum();
-        free_blocks as f32 / self.total_memory as f32
+pub struct DynamicMemoryManager {
+    memory_pool: BTreeMap<usize, Vec<usize>>,
+    total_memory: usize,
+    allocated_memory: usize,
+    block_size: usize,
+}
+
+impl DynamicMemoryManager {
+    pub fn new(block_size: usize, total_memory: usize) -> Self {
+        DynamicMemoryManager {
+            memory_pool: BTreeMap::new(),
+            total_memory,
+            allocated_memory: 0,
+            block_size,
+        }
     }
+}
 
-    fn defragment(&mut self) {
-        let mut new_pool: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        let mut current_address = 0;
+impl MemoryManager for DynamicMemoryManager {
+    fn allocate(&mut self, size: usize) -> Result<(), MemoryError> {
+        let blocks_needed = (size + self.block_size - 1) / self.block_size;
+        let total_size = blocks_needed * self.block_size;
 
-        for (size, blocks) in self.memory_pool.iter() {
-            for _ in blocks {
-                new_pool.entry(*size).or_default().push(current_address);
-                current_address += size;
-            }
+        if self.allocated_memory + total_size > self.total_memory {
+            return Err(MemoryError::InsufficientMemory);
         }
 
-        self.memory_pool = new_pool;
+        let start_address = self.allocated_memory;
+        self.memory_pool.entry(total_size).or_default().push(start_address);
+        self.allocated_memory += total_size;
+
+        Ok(())
     }
 
-    pub fn get_fragmentation_percentage(&self) -> f32 {
-        self.fragmentation_level() * 100.0
+    fn deallocate(&mut self, size: usize) -> Result<(), MemoryError> {
+        let blocks_needed = (size + self.block_size - 1) / self.block_size;
+        let total_size = blocks_needed * self.block_size;
+
+        if let Some(addresses) = self.memory_pool.get_mut(&total_size) {
+            if let Some(_) = addresses.pop() {
+                self.allocated_memory -= total_size;
+                Ok(())
+            } else {
+                Err(MemoryError::BlockNotFound)
+            }
+        } else {
+            Err(MemoryError::SizeNotFound)
+        }
+    }
+
+    fn get_available_memory(&self) -> usize {
+        self.total_memory - self.allocated_memory
+    }
+
+    fn allocate_for_tasks(&mut self, tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
+        let total_required: usize = tasks.iter().map(|task| task.memory_requirement).sum();
+
+        if total_required > self.get_available_memory() {
+            return Err(MemoryError::InsufficientMemory);
+        }
+
+        for task in tasks {
+            self.allocate(task.memory_requirement)?;
+        }
+
+        Ok(())
+    }
+
+    fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
+        for task in completed_tasks {
+            self.deallocate(task.memory_requirement)?;
+        }
+        Ok(())
+    }
+}
+
+// Remove duplicate implementation
+
+pub enum MemoryStrategy {
+    Simple(SimpleMemoryManager),
+    Dynamic(DynamicMemoryManager),
+}
+
+impl MemoryManager for MemoryStrategy {
+    fn allocate(&mut self, size: usize) -> Result<(), MemoryError> {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.allocate(size),
+            MemoryStrategy::Dynamic(manager) => manager.allocate(size),
+        }
+    }
+
+    fn deallocate(&mut self, size: usize) -> Result<(), MemoryError> {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.deallocate(size),
+            MemoryStrategy::Dynamic(manager) => manager.deallocate(size),
+        }
+    }
+
+    fn get_available_memory(&self) -> usize {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.get_available_memory(),
+            MemoryStrategy::Dynamic(manager) => manager.get_available_memory(),
+        }
+    }
+
+    fn allocate_for_tasks(&mut self, tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.allocate_for_tasks(tasks),
+            MemoryStrategy::Dynamic(manager) => manager.allocate_for_tasks(tasks),
+        }
+    }
+
+    fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError> {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.deallocate_completed_tasks(completed_tasks),
+            MemoryStrategy::Dynamic(manager) => manager.deallocate_completed_tasks(completed_tasks),
+        }
     }
 }
