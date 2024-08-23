@@ -1354,31 +1354,6 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn authenticate_user(
-        &mut self,
-        username: &str,
-        password: &str,
-    ) -> Result<String, XpuOptimizerError> {
-        let user = self.users
-            .get(username)
-            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
-
-        let parsed_hash = PasswordHash::new(&user.password_hash)
-            .map_err(|e| XpuOptimizerError::AuthenticationError(e.to_string()))?;
-
-        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
-            let token = self.generate_jwt_token(username, &user.role)?;
-            let session = Session {
-                user_id: username.to_string(),
-                expiration: Utc::now() + chrono::Duration::hours(24),
-            };
-            self.sessions.insert(token.clone(), session);
-            Ok(token)
-        } else {
-            Err(XpuOptimizerError::AuthenticationError("Invalid password".to_string()))
-        }
-    }
-
     fn generate_jwt_token(
         &self,
         username: &str,
