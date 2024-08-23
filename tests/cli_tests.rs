@@ -87,19 +87,21 @@ fn test_configure_xpu_manager() {
     .unwrap();
 
     let result = configure_xpu_manager(config_path.to_str().unwrap());
-    assert!(result.is_ok());
+    match result {
+        Ok(optimizer) => {
+            assert_eq!(optimizer.config.num_processing_units, 8, "Incorrect number of processing units");
+            assert_eq!(optimizer.config.memory_pool_size, 2048, "Incorrect memory pool size");
+            assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing), "Incorrect scheduler type");
+            assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic), "Incorrect memory manager type");
+            assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Aggressive), "Incorrect power management policy");
+            assert!(matches!(optimizer.config.cloud_offloading_policy, CloudOffloadingPolicy::Always), "Incorrect cloud offloading policy");
+            assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven", "Incorrect adaptive optimization policy");
 
-    let optimizer = result.unwrap();
-    assert_eq!(optimizer.config.num_processing_units, 8);
-    assert_eq!(optimizer.config.memory_pool_size, 2048);
-    assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
-    assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
-    assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Aggressive));
-    assert!(matches!(optimizer.config.cloud_offloading_policy, CloudOffloadingPolicy::Always));
-    assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
-
-    assert_eq!(optimizer.processing_units.len(), 8);
-    assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
+            assert_eq!(optimizer.processing_units.len(), 8, "Incorrect number of processing units initialized");
+            assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)), "Incorrect scheduler initialized");
+        },
+        Err(e) => panic!("Failed to configure XPU manager: {:?}", e),
+    }
 }
 
 #[test]
