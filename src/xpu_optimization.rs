@@ -661,12 +661,23 @@ impl LoadBalancer for DefaultLoadBalancer {
 #[derive(Clone)]
 struct DefaultMLModel {
     policy: String,
+    ml_driven_params: Option<MLDrivenParams>,
+}
+
+#[derive(Clone)]
+struct MLDrivenParams {
+    learning_rate: f64,
+    batch_size: usize,
 }
 
 impl DefaultMLModel {
     fn new() -> Self {
         DefaultMLModel {
             policy: "default".to_string(),
+            ml_driven_params: Some(MLDrivenParams {
+                learning_rate: 0.01,
+                batch_size: 32,
+            }),
         }
     }
 }
@@ -736,7 +747,9 @@ impl XpuOptimizer {
         }
 
         let ml_model: Arc<Mutex<dyn MLModel + Send + Sync>> = Arc::new(Mutex::new(SimpleRegressionModel::new()));
-        let ml_optimizer: Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>> = Arc::new(Mutex::new(DefaultMLOptimizer::new(Some(Arc::clone(&ml_model)))));
+        let mut ml_optimizer = DefaultMLOptimizer::new(Some(Arc::clone(&ml_model)));
+        ml_optimizer.set_policy(&config.adaptive_optimization_policy)?;
+        let ml_optimizer: Arc<Mutex<dyn MachineLearningOptimizer + Send + Sync>> = Arc::new(Mutex::new(ml_optimizer));
         let cloud_offloader: Arc<Mutex<dyn CloudOffloader + Send + Sync>> = Arc::new(Mutex::new(DefaultCloudOffloader::new()));
         let distributed_memory_manager: Arc<Mutex<dyn DistributedMemoryManager + Send + Sync>> = Arc::new(Mutex::new(DefaultDistributedMemoryManager::new(config.memory_pool_size)));
         let power_manager = PowerManager::new();

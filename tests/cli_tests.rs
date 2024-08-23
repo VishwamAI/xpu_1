@@ -8,6 +8,7 @@ use xpu_manager_rust::{
     power_management::PowerManagementPolicy,
     cloud_offloading::CloudOffloadingPolicy,
 };
+use env_logger;
 
 #[test]
 fn test_parse_config_file() {
@@ -101,40 +102,44 @@ fn test_configure_xpu_manager() {
     // Test valid adaptive optimization policies
     let adaptive_policies = vec![
         "default",
+        "aggressive",
+        "conservative",
         "ml-driven",
     ];
 
     for (policy_str, expected_policy) in test_configs {
-        let config_path = temp_dir.path().join(format!("test_config_{}.json", policy_str));
-        std::fs::write(
-            &config_path,
-            format!(r#"
-            {{
-                "num_processing_units": 8,
-                "memory_pool_size": 2048,
-                "scheduler_type": "LoadBalancing",
-                "memory_manager_type": "Dynamic",
-                "power_management_policy": "default",
-                "cloud_offloading_policy": "{}",
-                "adaptive_optimization_policy": "ml-driven"
-            }}
-            "#, policy_str),
-        ).unwrap();
+        for &adaptive_policy in &adaptive_policies {
+            let config_path = temp_dir.path().join(format!("test_config_{}_{}.json", policy_str, adaptive_policy));
+            std::fs::write(
+                &config_path,
+                format!(r#"
+                {{
+                    "num_processing_units": 8,
+                    "memory_pool_size": 2048,
+                    "scheduler_type": "LoadBalancing",
+                    "memory_manager_type": "Dynamic",
+                    "power_management_policy": "default",
+                    "cloud_offloading_policy": "{}",
+                    "adaptive_optimization_policy": "{}"
+                }}
+                "#, policy_str, adaptive_policy),
+            ).unwrap();
 
-        let result = configure_xpu_manager(config_path.to_str().unwrap());
-        assert!(result.is_ok(), "configure_xpu_manager failed for '{}' policy: {:?}", policy_str, result.err());
+            let result = configure_xpu_manager(config_path.to_str().unwrap());
+            assert!(result.is_ok(), "configure_xpu_manager failed for '{}' cloud policy and '{}' adaptive policy: {:?}", policy_str, adaptive_policy, result.err());
 
-        let optimizer = result.unwrap();
-        assert_eq!(optimizer.config.num_processing_units, 8);
-        assert_eq!(optimizer.config.memory_pool_size, 2048);
-        assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
-        assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
-        assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Default));
-        assert!(matches!(optimizer.config.cloud_offloading_policy, expected_policy));
-        assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
+            let optimizer = result.unwrap();
+            assert_eq!(optimizer.config.num_processing_units, 8);
+            assert_eq!(optimizer.config.memory_pool_size, 2048);
+            assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
+            assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
+            assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Default));
+            assert!(matches!(optimizer.config.cloud_offloading_policy, expected_policy));
+            assert_eq!(optimizer.config.adaptive_optimization_policy, adaptive_policy);
 
-        assert_eq!(optimizer.processing_units.len(), 8);
-        assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
+            assert_eq!(optimizer.processing_units.len(), 8);
+            assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
+        }
     }
 
     // Test with invalid configuration

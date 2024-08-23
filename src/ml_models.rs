@@ -147,6 +147,10 @@ impl MLModel for SimpleRegressionModel {
             "conservative" => {
                 // Implement more conservative learning rate or fewer iterations
             },
+            "ml-driven" => {
+                // Implement ML-driven policy settings
+                log::info!("Using ML-driven policy for optimization");
+            },
             _ => return Err(XpuOptimizerError::MLOptimizationError(format!("Unknown policy: {}", policy))),
         }
         Ok(())
