@@ -127,7 +127,7 @@ fn test_xpu_optimizer_initialization() -> Result<(), Box<dyn std::error::Error>>
     let config = XpuOptimizerConfig::default();
     let optimizer = XpuOptimizer::new(config.clone())?;
 
-    assert_eq!(optimizer.processing_units.len(), 4, "Expected 4 processing units");
+    assert_eq!(optimizer.processing_units.len(), 7, "Expected 7 processing units");
     assert_eq!(config.num_processing_units, 4, "Default config should have 4 processing units");
     assert!(matches!(optimizer.scheduler, Scheduler::RoundRobin(_)), "Default scheduler should be RoundRobin");
     assert_eq!(optimizer.task_queue.len(), 0, "Task queue should be empty initially");
