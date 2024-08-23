@@ -11,7 +11,7 @@ use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use log::{info, warn, error};
+use log::{info, warn, error, debug};
 
 // Custom modules
 use crate::cloud_offloading::{CloudOffloader, CloudOffloadingPolicy};
@@ -322,19 +322,29 @@ impl XpuOptimizer {
         }
         self.config.num_processing_units = num;
         self.processing_units.clear();
+        let unit_types = [
+            ProcessingUnitType::CPU,
+            ProcessingUnitType::GPU,
+            ProcessingUnitType::TPU,
+            ProcessingUnitType::NPU,
+            ProcessingUnitType::LPU,
+            ProcessingUnitType::VPU,
+            ProcessingUnitType::FPGA,
+        ];
         for i in 0..num {
-            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match i % 7 {
-                0 => Arc::new(Mutex::new(CPU::new(i, 1.0))),
-                1 => Arc::new(Mutex::new(GPU::new(i, 1.0))),
-                2 => Arc::new(Mutex::new(TPU::new(i, 1.0))),
-                3 => Arc::new(Mutex::new(NPU::new(i, 1.0))),
-                4 => Arc::new(Mutex::new(LPU::new(i, 1.0))),
-                5 => Arc::new(Mutex::new(VPU::new(i, 1.0))),
-                6 => Arc::new(Mutex::new(FPGACore::new(i, 1.0))),
-                _ => unreachable!(),
+            let unit_type = &unit_types[i % unit_types.len()];
+            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(i, 1.0))),
+                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(i, 1.0))),
+                ProcessingUnitType::TPU => Arc::new(Mutex::new(TPU::new(i, 1.0))),
+                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(i, 1.0))),
+                ProcessingUnitType::LPU => Arc::new(Mutex::new(LPU::new(i, 1.0))),
+                ProcessingUnitType::VPU => Arc::new(Mutex::new(VPU::new(i, 1.0))),
+                ProcessingUnitType::FPGA => Arc::new(Mutex::new(FPGACore::new(i, 1.0))),
             };
             self.processing_units.push(unit);
         }
+        info!("Initialized {} processing units", self.processing_units.len());
         Ok(())
     }
 
@@ -857,54 +867,412 @@ impl XpuOptimizer {
     fn execute_tasks(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Executing tasks on respective processing units...");
 
+        // Sort tasks by priority (highest to lowest)
+        self.scheduled_tasks.sort_by(|a, b| b.priority.cmp(&a.priority));
+
         let mut execution_results = Vec::new();
+        let total_memory = self.config.memory_pool_size;
+        let mut available_memory = self.get_available_memory()?;
 
-        for task in &self.scheduled_tasks {
-            let unit_type = &task.unit_type;
-            let unit = self.processing_units.iter()
-                .find(|u| {
-                    u.lock().ok()
-                        .and_then(|guard| guard.get_unit_type().ok())
-                        .map_or(false, |ut| &ut == unit_type)
-                })
-                .ok_or_else(|| {
-                    warn!("No processing unit found for task {} of type {:?}", task.id, unit_type);
-                    XpuOptimizerError::ProcessingUnitNotFound(format!("No unit found for task {} of type {:?}", task.id, unit_type))
-                })?;
+        for task in self.scheduled_tasks.clone() {
+            info!("Attempting to execute task {} (priority: {}, memory requirement: {}, unit type: {:?})",
+                  task.id, task.priority, task.memory_requirement, task.unit_type);
 
-            let result = {
-                let mut unit_guard = unit.lock()
-                    .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
+            if task.memory_requirement > total_memory {
+                let err = XpuOptimizerError::MemoryError(
+                    format!("Memory requirement for task {} ({}) exceeds total memory ({})",
+                            task.id, task.memory_requirement, total_memory)
+                );
+                error!("{}", err);
+                execution_results.push(Err(err));
+                continue;
+            }
 
-                unit_guard.execute_task(task)
-                    .and_then(|duration| {
-                        unit_guard.assign_task(task)?;
-                        Ok((task.id, duration))
-                    })
-                    .map_err(|e| {
-                        warn!("Error executing task {} on unit {:?}: {}", task.id, unit_type, e);
-                        e
-                    })
-            };
+            // Check if there's enough available memory
+            if task.memory_requirement > available_memory {
+                // Try to free up memory
+                if let Err(e) = self.try_free_memory(task.memory_requirement - available_memory) {
+                    error!("Failed to free up memory for task {}: {}", task.id, e);
+                    execution_results.push(Err(e));
+                    continue;
+                }
+                available_memory = self.get_available_memory()?;
+            }
 
-            execution_results.push(result);
-        }
-
-        for result in execution_results {
-            match result {
-                Ok((task_id, duration)) => {
-                    info!("Task {} completed in {:?}", task_id, duration);
-                    self.update_task_history(task_id.try_into().unwrap(), duration, true)?;
+            // Try to allocate memory for the task
+            match self.allocate_memory_for_task(&task) {
+                Ok(_) => {
+                    available_memory -= task.memory_requirement;
+                    debug!("Allocated {} memory for task {}. Available memory: {}",
+                           task.memory_requirement, task.id, available_memory);
                 },
                 Err(e) => {
-                    error!("Error executing task: {}", e);
-                    // Continue execution for other tasks instead of returning immediately
-                    self.update_task_history(e.task_id().unwrap_or_default().try_into().unwrap(), Duration::from_secs(0), false)?;
+                    error!("Failed to allocate memory for task {}: {}", task.id, e);
+                    execution_results.push(Err(e));
+                    continue;
+                }
+            }
+
+            let execution_result = match self.find_suitable_unit(&task) {
+                Ok(Some(unit)) => self.execute_task_on_unit(&task, unit),
+                Ok(None) => Err(XpuOptimizerError::ProcessingUnitNotFound(
+                    format!("No suitable processing unit found for task {}", task.id)
+                )),
+                Err(e) => Err(e),
+            };
+
+            match &execution_result {
+                Ok((id, duration)) => {
+                    info!("Task {} executed successfully in {:?}", id, duration);
                 },
+                Err(e) => {
+                    error!("Failed to execute task {}: {}", task.id, e);
+                }
+            }
+
+            execution_results.push(execution_result);
+
+            // Always attempt to deallocate memory after task execution
+            match self.deallocate_memory_for_task(&task) {
+                Ok(_) => {
+                    available_memory += task.memory_requirement;
+                    debug!("Deallocated {} memory for task {}. Available memory: {}",
+                           task.memory_requirement, task.id, available_memory);
+                },
+                Err(e) => {
+                    error!("Failed to deallocate memory for task {}: {}", task.id, e);
+                    // Attempt to try free the memory
+                    if let Err(free_err) = self.try_free_memory(task.memory_requirement) {
+                        error!("Failed to try free memory for task {}: {}. Memory leak may occur!", task.id, free_err);
+                    } else {
+                        available_memory += task.memory_requirement;
+                        warn!("Tried to free {} memory for task {}. Available memory: {}",
+                              task.memory_requirement, task.id, available_memory);
+                    }
+                }
             }
         }
 
-        Ok(())
+        let (successful, failed): (Vec<_>, Vec<_>) = execution_results.into_iter().partition(Result::is_ok);
+        info!("Executed {} tasks successfully, {} tasks failed", successful.len(), failed.len());
+
+        if !failed.is_empty() {
+            Err(XpuOptimizerError::TaskExecutionError(format!("{} out of {} tasks failed", failed.len(), self.scheduled_tasks.len())))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn execute_task_with_memory_management(&mut self, task: &Task, available_memory: &mut usize, unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>) -> Result<(u32, Duration), XpuOptimizerError> {
+        if task.memory_requirement > *available_memory {
+            self.try_free_memory(task.memory_requirement - *available_memory)?;
+            *available_memory = self.get_available_memory()?;
+
+            if task.memory_requirement > *available_memory {
+                return Err(XpuOptimizerError::MemoryError(
+                    format!("Insufficient memory for task {} after freeing: required {}, available {}",
+                            task.id, task.memory_requirement, available_memory)
+                ));
+            }
+        }
+
+        self.allocate_memory_for_task(task)?;
+        *available_memory -= task.memory_requirement;
+        info!("Memory allocated for task {}. Remaining memory: {}", task.id, available_memory);
+
+        let result = self.execute_task_on_unit(task, unit)?;
+
+        match self.deallocate_memory_for_task(task) {
+            Ok(_) => {
+                *available_memory += task.memory_requirement;
+                info!("Successfully deallocated memory for task {}. Available memory: {}", task.id, available_memory);
+            },
+            Err(e) => {
+                error!("Failed to deallocate memory for task {}: {}. Attempting to free memory...", task.id, e);
+                if let Err(free_err) = self.try_free_memory(task.memory_requirement) {
+                    error!("Failed to free memory for task {}: {}. Memory leak may occur!", task.id, free_err);
+                } else {
+                    *available_memory += task.memory_requirement;
+                    info!("Successfully freed memory for task {}. Available memory: {}", task.id, available_memory);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub fn get_available_memory(&self) -> Result<usize, XpuOptimizerError> {
+        let memory_manager = self.memory_manager.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock memory manager: {}", e)))?;
+
+        Ok(memory_manager.get_available_memory())
+    }
+
+    fn try_free_memory(&mut self, required_memory: usize) -> Result<(), XpuOptimizerError> {
+        let mut memory_manager = self.memory_manager.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock memory manager: {}", e)))?;
+
+        let available_memory = memory_manager.get_available_memory();
+        if available_memory >= required_memory {
+            return Ok(());
+        }
+
+        // Attempt to free memory by deallocating from low-priority tasks
+        let mut freed_memory = 0;
+        for task in self.scheduled_tasks.iter().rev() {
+            if freed_memory >= required_memory - available_memory {
+                break;
+            }
+            if let Err(e) = memory_manager.deallocate(task.memory_requirement) {
+                warn!("Failed to deallocate memory for task {}: {}", task.id, e);
+            } else {
+                freed_memory += task.memory_requirement;
+            }
+        }
+
+        if memory_manager.get_available_memory() >= required_memory {
+            Ok(())
+        } else {
+            Err(XpuOptimizerError::MemoryError(format!(
+                "Failed to free enough memory. Required: {}, Available: {}",
+                required_memory,
+                memory_manager.get_available_memory()
+            )))
+        }
+    }
+
+    fn handle_task_execution_error(&self, task: &Task, error: &XpuOptimizerError) {
+        match error {
+            XpuOptimizerError::MemoryError(_) => {
+                warn!("Memory allocation failed for task {}. Attempting to free up memory.", task.id);
+                if let Err(e) = self.deallocate_memory_for_task(task) {
+                    error!("Failed to deallocate memory for task {}: {}", task.id, e);
+                }
+            },
+            XpuOptimizerError::ProcessingUnitNotFound(_) => {
+                warn!("No suitable processing unit found for task {}. Skipping task.", task.id);
+            },
+            _ => {
+                warn!("Unexpected error occurred while executing task {}. Skipping task.", task.id);
+            }
+        }
+    }
+
+    fn find_and_execute_task(&mut self, task: &Task, available_memory: &mut usize) -> Result<(u32, Duration), XpuOptimizerError> {
+        // Find a suitable processing unit for the task
+        let suitable_unit = self.find_suitable_unit(task)?
+            .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(format!("No suitable unit found for task {} of type {:?}", task.id, task.unit_type)))?;
+
+        // Check if there's enough memory available
+        if task.memory_requirement > *available_memory {
+            return Err(XpuOptimizerError::MemoryError(format!("Insufficient memory for task {}: required {}, available {}", task.id, task.memory_requirement, available_memory)));
+        }
+
+        // Allocate memory for the task
+        self.allocate_memory_for_task(task)?;
+        *available_memory -= task.memory_requirement;
+        info!("Memory allocated for task {}: {} units", task.id, task.memory_requirement);
+
+        // Execute the task
+        let result = {
+            let mut unit_guard = suitable_unit.lock()
+                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit: {}", e)))?;
+            unit_guard.execute_task(task)
+        };
+
+        // Handle the result
+        match result {
+            Ok(duration) => {
+                info!("Task {} executed successfully in {:?}", task.id, duration);
+                Ok((task.id as u32, duration))
+            },
+            Err(e) => {
+                error!("Task {} failed: {}", task.id, e);
+                Err(e)
+            }
+        }
+    }
+
+    fn allocate_memory_for_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
+        let mut memory_manager = self.memory_manager.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock memory manager: {}", e)))?;
+
+        let available_memory = memory_manager.get_available_memory();
+        if available_memory < task.memory_requirement {
+            error!("Insufficient memory for task {}: required {}, available {}",
+                   task.id, task.memory_requirement, available_memory);
+            return Err(XpuOptimizerError::MemoryError(
+                format!("Insufficient memory for task {}: required {}, available {}",
+                        task.id, task.memory_requirement, available_memory)
+            ));
+        }
+
+        if task.memory_requirement == 0 {
+            warn!("Task {} requires 0 memory, skipping allocation", task.id);
+            return Ok(());
+        }
+
+        info!("Attempting to allocate {} memory units for task {}", task.memory_requirement, task.id);
+        match memory_manager.allocate(task.memory_requirement) {
+            Ok(_) => {
+                info!("Successfully allocated {} memory units for task {}", task.memory_requirement, task.id);
+                Ok(())
+            },
+            Err(e) => {
+                error!("Failed to allocate memory for task {}: {}", task.id, e);
+                // Check if any memory was partially allocated
+                let new_available_memory = memory_manager.get_available_memory();
+                if new_available_memory < available_memory {
+                    let partially_allocated = available_memory - new_available_memory;
+                    warn!("Detected partial allocation of {} memory units", partially_allocated);
+                    if let Err(dealloc_err) = memory_manager.deallocate(partially_allocated) {
+                        error!("Failed to deallocate partially allocated memory: {}", dealloc_err);
+                    } else {
+                        info!("Successfully deallocated partially allocated memory");
+                    }
+                }
+                Err(XpuOptimizerError::MemoryError(format!("Failed to allocate memory for task {}: {}", task.id, e)))
+            }
+        }
+    }
+
+    fn deallocate_memory_for_task(&self, task: &Task) -> Result<(), XpuOptimizerError> {
+        let mut memory_manager = self.memory_manager.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock memory manager: {}", e)))?;
+
+        match memory_manager.deallocate(task.memory_requirement) {
+            Ok(_) => {
+                info!("Successfully deallocated {} memory units for task {}", task.memory_requirement, task.id);
+                Ok(())
+            },
+            Err(e) => {
+                error!("Failed to deallocate memory for task {}: {}", task.id, e);
+                // Attempt to recover by forcefully freeing the memory
+                match memory_manager.force_free(task.memory_requirement) {
+                    Ok(_) => {
+                        warn!("Forcefully freed {} memory units for task {}", task.memory_requirement, task.id);
+                        Ok(()) // Return Ok since we managed to free the memory
+                    },
+                    Err(force_free_err) => {
+                        error!("Failed to forcefully free memory for task {}: {}", task.id, force_free_err);
+                        Err(XpuOptimizerError::MemoryError(format!(
+                            "Failed to deallocate and forcefully free memory for task {}: {}",
+                            task.id, force_free_err
+                        )))
+                    }
+                }
+            }
+        }
+    }
+
+    fn process_execution_results(&mut self, execution_results: Vec<Result<(u32, Duration), XpuOptimizerError>>) -> Result<(), XpuOptimizerError> {
+        let (successful_tasks, failed_tasks): (Vec<_>, Vec<_>) = execution_results.into_iter()
+            .partition(|result| result.is_ok());
+
+        let successful_count = successful_tasks.len();
+        let failed_count = failed_tasks.len();
+
+        for result in successful_tasks {
+            if let Ok((task_id, duration)) = result {
+                info!("Task {} completed successfully in {:?}", task_id, duration);
+                match self.update_task_history(task_id as usize, duration, true) {
+                    Ok(_) => info!("Task history updated for successful task {}", task_id),
+                    Err(e) => warn!("Failed to update task history for successful task {}: {}", task_id, e),
+                }
+            }
+        }
+
+        let mut error_summary = Vec::new();
+        for result in failed_tasks {
+            if let Err(ref e) = result {
+                error!("Error executing task: {}", e);
+                let error_type = match e {
+                    XpuOptimizerError::MemoryError(ref msg) => {
+                        error!("Memory allocation error: {}", msg);
+                        "Memory allocation"
+                    },
+                    XpuOptimizerError::TaskExecutionError(ref msg) => {
+                        error!("Task execution error: {}", msg);
+                        "Task execution"
+                    },
+                    _ => {
+                        error!("Unexpected error type: {:?}", e);
+                        "Unexpected"
+                    }
+                };
+                if let Some(task_id) = e.task_id() {
+                    match self.update_task_history(task_id as usize, Duration::from_secs(0), false) {
+                        Ok(_) => info!("Task history updated for failed task {}", task_id),
+                        Err(update_err) => warn!("Failed to update task history for failed task {}: {}", task_id, update_err),
+                    }
+                    error_summary.push(format!("Task {}: {} error", task_id, error_type));
+                } else {
+                    warn!("Could not update task history for failed task: task ID unknown");
+                    error_summary.push(format!("Unknown task: {} error", error_type));
+                }
+            }
+        }
+
+        info!("Task execution completed. Successful: {}, Failed: {}", successful_count, failed_count);
+
+        if failed_count > 0 {
+            warn!("Some tasks failed during execution. Error summary: {}", error_summary.join(", "));
+            Err(XpuOptimizerError::TaskExecutionError(format!("{} out of {} tasks failed. Errors: {}",
+                failed_count, successful_count + failed_count, error_summary.join(", "))))
+        } else {
+            info!("All tasks completed successfully");
+            Ok(())
+        }
+    }
+
+    fn execute_single_task(&mut self, task: &Task) -> Result<(u32, Duration), XpuOptimizerError> {
+        let available_memory = self.get_available_memory()?;
+
+        if available_memory < task.memory_requirement {
+            return Err(XpuOptimizerError::MemoryError(
+                format!("Insufficient memory for task {}: required {}, available {}",
+                    task.id, task.memory_requirement, available_memory)
+            ));
+        }
+
+        // Allocate memory for the task
+        self.allocate_memory_for_task(task).map_err(|e| {
+            error!("Failed to allocate memory for task {}: {}", task.id, e);
+            e
+        })?;
+        info!("Memory allocated for task {}: {} units", task.id, task.memory_requirement);
+
+        let result = self.find_suitable_unit(task)
+            .and_then(|opt_unit| opt_unit.ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(
+                format!("No suitable unit found for task {} of type {:?}", task.id, task.unit_type)
+            )))
+            .and_then(|unit| self.execute_task_on_unit(task, unit));
+
+        // Handle the result
+        match &result {
+            Ok((_, duration)) => {
+                info!("Task {} executed successfully in {:?}", task.id, duration);
+                self.update_task_history(task.id, *duration, true).map_err(|e| {
+                    error!("Failed to update task history for task {}: {}", task.id, e);
+                    e
+                })?;
+            },
+            Err(e) => {
+                error!("Failed to execute task {}: {}", task.id, e);
+                self.update_task_history(task.id, Duration::from_secs(0), false).map_err(|e| {
+                    error!("Failed to update task history for failed task {}: {}", task.id, e);
+                    e
+                })?;
+            }
+        }
+
+        // Always attempt to deallocate memory, even if task execution failed
+        self.deallocate_memory_for_task(task).map_err(|e| {
+            error!("Failed to deallocate memory for task {}: {}", task.id, e);
+            e
+        })?;
+
+        result
     }
 
     fn schedule_tasks(&mut self) -> Result<(), XpuOptimizerError> {
@@ -912,52 +1280,253 @@ impl XpuOptimizer {
         self.resolve_dependencies()?;
 
         let tasks: Vec<Task> = self.task_queue.iter().cloned().collect();
-        let scheduled_tasks = {
-            let scheduler = self.scheduler.lock()
-                .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock scheduler: {}", e)))?;
-            match scheduler.schedule(&tasks, &self.processing_units) {
-                Ok(scheduled) => scheduled,
-                Err(e) => {
-                    error!("Failed to schedule tasks: {}", e);
-                    return Err(XpuOptimizerError::SchedulingError(format!("Task scheduling failed: {}", e)));
-                }
-            }
-        };
+        info!("Total tasks to schedule: {}", tasks.len());
 
-        if scheduled_tasks.len() != tasks.len() {
-            warn!("Not all tasks were scheduled. Scheduled: {}, Total: {}", scheduled_tasks.len(), tasks.len());
+        let mut scheduled_tasks = Vec::new();
+        let mut unscheduled_tasks = Vec::new();
+
+        // Sort tasks by priority (highest to lowest) and then by memory requirement (lowest to highest)
+        let mut sorted_tasks = tasks;
+        sorted_tasks.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.memory_requirement.cmp(&b.memory_requirement)));
+
+        let total_memory = self.get_available_memory()?;
+        let mut remaining_memory = total_memory;
+
+        for task in sorted_tasks {
+            if task.memory_requirement <= remaining_memory {
+                match self.schedule_single_task(&task, 3) {
+                    Ok(unit) => {
+                        if let Err(e) = self.allocate_memory_for_task(&task) {
+                            warn!("Failed to allocate memory for task {} (priority: {}, memory: {}): {}", task.id, task.priority, task.memory_requirement, e);
+                            unscheduled_tasks.push(task);
+                        } else {
+                            scheduled_tasks.push((task.clone(), unit));
+                            remaining_memory -= task.memory_requirement;
+                            info!("Task {} (priority: {}, memory: {}) scheduled successfully", task.id, task.priority, task.memory_requirement);
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Failed to schedule task {} (priority: {}, memory: {}): {}", task.id, task.priority, task.memory_requirement, e);
+                        unscheduled_tasks.push(task);
+                    }
+                }
+            } else {
+                warn!("Insufficient memory for task {} (priority: {}, memory: {})", task.id, task.priority, task.memory_requirement);
+                unscheduled_tasks.push(task);
+            }
         }
 
-        self.scheduled_tasks = scheduled_tasks.into_iter().map(|(task, _)| task).collect();
+        info!("Initially scheduled tasks: {}, Unscheduled tasks: {}", scheduled_tasks.len(), unscheduled_tasks.len());
+        self.log_unscheduled_tasks(&unscheduled_tasks);
 
-        // Implement energy efficiency optimization
+        if !unscheduled_tasks.is_empty() {
+            self.reschedule_tasks(&mut unscheduled_tasks, &mut scheduled_tasks)?;
+        }
+
+        self.update_scheduled_tasks(scheduled_tasks)?;
+
+        if !unscheduled_tasks.is_empty() {
+            warn!("Failed to schedule {} tasks", unscheduled_tasks.len());
+            self.handle_unscheduled_tasks(&unscheduled_tasks)?;
+        }
+
+        info!("All {} tasks successfully scheduled or handled", self.scheduled_tasks.len());
+
         self.optimize_energy_efficiency()?;
-
         self.adapt_scheduling_parameters()?;
+
         info!("Tasks scheduled with pluggable strategy and adaptive optimization");
+        Ok(())
+    }
+
+    fn schedule_single_task(&self, task: &Task, max_attempts: usize) -> Result<Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>, XpuOptimizerError> {
+        for attempt in 1..=max_attempts {
+            match self.find_suitable_unit(task) {
+                Ok(Some(unit)) => return Ok(unit),
+                Ok(None) if attempt < max_attempts => {
+                    warn!("Scheduling attempt {} for task {} failed. Retrying...", attempt, task.id);
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
+                },
+                Ok(None) => {
+                    if attempt == max_attempts {
+                        return Err(XpuOptimizerError::SchedulingError(format!("No suitable unit found for task {} after {} attempts", task.id, max_attempts)));
+                    }
+                },
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!("This line should never be reached due to the return in the last iteration of the loop")
+    }
+
+    fn log_unscheduled_tasks(&self, unscheduled_tasks: &[Task]) {
+        if !unscheduled_tasks.is_empty() {
+            warn!("Not all tasks were initially scheduled. Unscheduled: {}", unscheduled_tasks.len());
+            for task in unscheduled_tasks {
+                warn!("Task {} (type: {:?}, priority: {}) could not be initially scheduled", task.id, task.unit_type, task.priority);
+            }
+        }
+    }
+
+    fn update_scheduled_tasks(&mut self, scheduled_tasks: Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>) -> Result<(), XpuOptimizerError> {
+        self.scheduled_tasks = scheduled_tasks.into_iter().map(|(task, _)| task).collect();
+        info!("Updated scheduled tasks. Total scheduled: {}", self.scheduled_tasks.len());
+        Ok(())
+    }
+
+    fn reschedule_tasks(&mut self, unscheduled_tasks: &mut Vec<Task>, scheduled_tasks: &mut Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>) -> Result<(), XpuOptimizerError> {
+        info!("Attempting to reschedule {} unscheduled tasks", unscheduled_tasks.len());
+
+        unscheduled_tasks.retain(|task| {
+            match self.find_suitable_unit_relaxed(task) {
+                Ok(Some(unit)) => {
+                    scheduled_tasks.push((task.clone(), unit));
+                    info!("Rescheduled task {} successfully with relaxed constraints", task.id);
+                    false // Remove from unscheduled_tasks
+                },
+                _ => {
+                    warn!("Failed to reschedule task {} even with relaxed constraints", task.id);
+                    true // Keep in unscheduled_tasks
+                }
+            }
+        });
+
+        if !unscheduled_tasks.is_empty() {
+            info!("Attempting fallback strategy for {} remaining tasks", unscheduled_tasks.len());
+            self.fallback_strategy(unscheduled_tasks)?;
+        }
 
         Ok(())
     }
 
-    fn execute_task_on_unit(&mut self, task: &Task, unit_type: &ProcessingUnitType) -> Result<Duration, XpuOptimizerError> {
-        let processing_unit = self.processing_units
-            .iter()
-            .find(|unit| {
-                unit.lock()
-                    .ok()
-                    .and_then(|guard| guard.get_unit_type().ok())
-                    .map(|ut| ut == *unit_type)
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(unit_type.to_string()))?;
+    fn fallback_strategy(&mut self, unscheduled_tasks: &mut Vec<Task>) -> Result<(), XpuOptimizerError> {
+        let mut offloaded_tasks = Vec::new();
+        let mut failed_tasks = Vec::new();
 
-        let mut unit_guard = processing_unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
-        let ut = unit_guard.get_unit_type()?;
-        if ut == *unit_type {
-            unit_guard.execute_task(task)
-                .map_err(|e| XpuOptimizerError::TaskExecutionError(format!("Error executing task {} on {}: {}", task.id, unit_type, e)))
+        for task in unscheduled_tasks.drain(..) {
+            match self.offload_to_cloud(&task) {
+                Ok(_) => {
+                    info!("Task {} offloaded to cloud", task.id);
+                    offloaded_tasks.push(task);
+                },
+                Err(e) => {
+                    error!("Failed to offload task {} to cloud: {}", task.id, e);
+                    failed_tasks.push(task);
+                }
+            }
+        }
+
+        if !failed_tasks.is_empty() {
+            warn!("Failed to schedule or offload {} tasks", failed_tasks.len());
+            unscheduled_tasks.extend(failed_tasks);
+        }
+
+        self.update_offloaded_tasks(offloaded_tasks);
+        Ok(())
+    }
+
+    fn handle_unscheduled_tasks(&self, unscheduled_tasks: &[Task]) -> Result<(), XpuOptimizerError> {
+        for task in unscheduled_tasks {
+            error!("Task {} (type: {:?}, priority: {}) could not be scheduled or offloaded", task.id, task.unit_type, task.priority);
+        }
+        // Depending on your error handling strategy, you might want to return an error here
+        // or implement a mechanism to retry these tasks later
+        Ok(())
+    }
+
+    fn update_offloaded_tasks(&mut self, offloaded_tasks: Vec<Task>) {
+        // Implement logic to track offloaded tasks, if necessary
+        info!("Updated offloaded tasks. Total offloaded: {}", offloaded_tasks.len());
+    }
+
+    fn find_suitable_unit_relaxed(&self, task: &Task) -> Result<Option<Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>>, XpuOptimizerError> {
+        let mut best_unit = None;
+        let mut lowest_load = f64::MAX;
+
+        for unit in &self.processing_units {
+            let unit_guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
+            let unit_type = unit_guard.get_unit_type().map_err(|e| XpuOptimizerError::ProcessingUnitError(e.to_string()))?;
+            let load_percentage = unit_guard.get_load_percentage().map_err(|e| XpuOptimizerError::ProcessingUnitError(e.to_string()))?;
+
+            if &unit_type == &task.unit_type || load_percentage < 0.8 {
+                if load_percentage < lowest_load {
+                    lowest_load = load_percentage;
+                    best_unit = Some(Arc::clone(unit));
+                }
+            }
+        }
+
+        Ok(best_unit)
+    }
+
+    fn find_suitable_unit(&self, task: &Task) -> Result<Option<Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>>, XpuOptimizerError> {
+        let mut best_unit = None;
+        let mut lowest_load = f64::MAX;
+
+        info!("Searching for suitable unit for task {} of type {:?}", task.id, task.unit_type);
+
+        for (index, unit) in self.processing_units.iter().enumerate() {
+            let unit_guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock processing unit {}: {}", index, e)))?;
+            let unit_type = unit_guard.get_unit_type().map_err(|e| XpuOptimizerError::ProcessingUnitError(format!("Failed to get unit type for unit {}: {}", index, e)))?;
+
+            if &unit_type == &task.unit_type {
+                match unit_guard.can_handle_task(task) {
+                    Ok(can_handle) => {
+                        if can_handle {
+                            let load_percentage = unit_guard.get_load_percentage().map_err(|e| XpuOptimizerError::ProcessingUnitError(format!("Failed to get load percentage for unit {}: {}", index, e)))?;
+                            if load_percentage < lowest_load {
+                                lowest_load = load_percentage;
+                                best_unit = Some(Arc::clone(unit));
+                                info!("Found potential unit {} of type {:?} with load {:.2}% for task {}", index, unit_type, load_percentage * 100.0, task.id);
+                            }
+                        } else {
+                            debug!("Processing unit {} of type {:?} cannot handle task {} due to insufficient resources", index, unit_type, task.id);
+                        }
+                    },
+                    Err(e) => warn!("Failed to check if unit {} can handle task {}: {}", index, task.id, e),
+                }
+            }
+        }
+
+        match best_unit {
+            Some(_) => info!("Selected best unit for task {} of type {:?} with load {:.2}%", task.id, task.unit_type, lowest_load * 100.0),
+            None => warn!("No suitable unit found for task {} of type {:?}", task.id, task.unit_type),
+        }
+
+        Ok(best_unit)
+    }
+
+
+
+    fn offload_to_cloud(&self, task: &Task) -> Result<(), XpuOptimizerError> {
+        let cloud_offloader = self.cloud_offloader.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock cloud offloader: {}", e)))?;
+
+        cloud_offloader.offload_task(task)
+            .map_err(|e| {
+                error!("Cloud offloading error for task {}: {}", task.id, e);
+                XpuOptimizerError::CloudOffloadingError(format!("Failed to offload task {}: {}", task.id, e))
+            })
+    }
+
+    fn execute_task_on_unit(&mut self, task: &Task, unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>) -> Result<(u32, Duration), XpuOptimizerError> {
+        let mut unit_guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
+        let unit_type = unit_guard.get_unit_type()?;
+
+        if unit_type == task.unit_type {
+            let result = unit_guard.execute_task(task);
+            drop(unit_guard); // Release the lock before updating task history
+            match result {
+                Ok(duration) => {
+                    self.update_task_history(task.id, duration, true)?;
+                    Ok((task.id as u32, duration))
+                },
+                Err(e) => {
+                    self.update_task_history(task.id, Duration::from_secs(0), false)?;
+                    Err(XpuOptimizerError::TaskExecutionError(format!("Error executing task {} on {:?}: {}", task.id, unit_type, e)))
+                }
+            }
         } else {
-            Err(XpuOptimizerError::ProcessingUnitNotFound(format!("Expected {}, found {}", unit_type, ut)))
+            Err(XpuOptimizerError::ProcessingUnitNotFound(format!("Expected {:?}, found {:?}", task.unit_type, unit_type)))
         }
     }
 
@@ -1607,5 +2176,44 @@ impl XpuOptimizer {
             );
         }
         Ok(())
+    }
+
+    pub fn get_memory_usage_timeline(&self) -> Result<Vec<MemoryUsagePoint>, XpuOptimizerError> {
+        let memory_manager = self.memory_manager.lock()
+            .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock memory manager: {}", e)))?;
+
+        let total_memory = self.config.memory_pool_size;
+        let available_memory = memory_manager.get_available_memory();
+        let used_memory = total_memory - available_memory;
+
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| XpuOptimizerError::SystemTimeError(e.to_string()))?
+            .as_secs();
+
+        Ok(vec![MemoryUsagePoint {
+            timestamp: current_time,
+            used_memory,
+            total_memory,
+        }])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryUsagePoint {
+    pub timestamp: u64,
+    pub used_memory: usize,
+    pub total_memory: usize,
+}
+
+impl PartialOrd for MemoryUsagePoint {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MemoryUsagePoint {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.timestamp.cmp(&other.timestamp)
     }
 }

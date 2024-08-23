@@ -17,6 +17,7 @@ pub trait MemoryManager {
     fn get_available_memory(&self) -> usize;
     fn allocate_for_tasks(&mut self, tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError>;
     fn deallocate_completed_tasks(&mut self, completed_tasks: &[crate::task_scheduling::Task]) -> Result<(), MemoryError>;
+    fn force_free(&mut self, size: usize) -> Result<(), MemoryError>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +142,40 @@ impl MemoryManager for SimpleMemoryManager {
         }
         Ok(())
     }
+
+    fn force_free(&mut self, size: usize) -> Result<(), MemoryError> {
+        if size > self.allocated_memory {
+            return Err(MemoryError::InsufficientMemory);
+        }
+
+        let mut freed = 0;
+        let mut to_remove = Vec::new();
+
+        for (&block_size, blocks) in self.memory_pool.iter_mut() {
+            while freed < size && !blocks.is_empty() {
+                blocks.pop();
+                freed += block_size;
+            }
+            if blocks.is_empty() {
+                to_remove.push(block_size);
+            }
+            if freed >= size {
+                break;
+            }
+        }
+
+        for block_size in to_remove {
+            self.memory_pool.remove(&block_size);
+        }
+
+        self.allocated_memory = self.allocated_memory.saturating_sub(freed);
+
+        if freed < size {
+            Err(MemoryError::InsufficientMemory)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub struct DynamicMemoryManager {
@@ -217,6 +252,27 @@ impl MemoryManager for DynamicMemoryManager {
         }
         Ok(())
     }
+
+    fn force_free(&mut self, size: usize) -> Result<(), MemoryError> {
+        let blocks_needed = (size + self.block_size - 1) / self.block_size;
+        let total_size = blocks_needed * self.block_size;
+
+        if total_size > self.allocated_memory {
+            return Err(MemoryError::InsufficientMemory);
+        }
+
+        self.allocated_memory -= total_size;
+
+        // Remove the freed memory from the pool
+        for (_, addresses) in self.memory_pool.iter_mut() {
+            addresses.retain(|&addr| addr < self.allocated_memory);
+        }
+
+        // Remove any empty entries from the memory pool
+        self.memory_pool.retain(|_, addresses| !addresses.is_empty());
+
+        Ok(())
+    }
 }
 
 // Remove duplicate implementation
@@ -224,6 +280,15 @@ impl MemoryManager for DynamicMemoryManager {
 pub enum MemoryStrategy {
     Simple(SimpleMemoryManager),
     Dynamic(DynamicMemoryManager),
+}
+
+impl MemoryStrategy {
+    pub fn get_available_memory(&self) -> usize {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.get_available_memory(),
+            MemoryStrategy::Dynamic(manager) => manager.get_available_memory(),
+        }
+    }
 }
 
 impl MemoryManager for MemoryStrategy {
@@ -261,4 +326,15 @@ impl MemoryManager for MemoryStrategy {
             MemoryStrategy::Dynamic(manager) => manager.deallocate_completed_tasks(completed_tasks),
         }
     }
+
+    fn force_free(&mut self, size: usize) -> Result<(), MemoryError> {
+        match self {
+            MemoryStrategy::Simple(manager) => manager.force_free(size),
+            MemoryStrategy::Dynamic(manager) => manager.force_free(size),
+        }
+    }
 }
+
+// The force_free implementations for SimpleMemoryManager and DynamicMemoryManager
+// have been removed from this location as they are already correctly implemented
+// earlier in the file. This avoids duplication and potential confusion.

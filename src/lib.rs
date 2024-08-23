@@ -49,7 +49,7 @@ pub use fpga::core::FPGACore;
 
 pub use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum XpuOptimizerError {
     #[error("Scheduling error: {0}")]
     SchedulingError(String),
@@ -109,6 +109,10 @@ pub enum XpuOptimizerError {
     DivisionByZeroError(String),
     #[error("Initialization error: {0}")]
     InitializationError(String),
+    #[error("Processing unit error: {0}")]
+    ProcessingUnitError(String),
+    #[error("System time error: {0}")]
+    SystemTimeError(String),
 }
 
 impl XpuOptimizerError {
