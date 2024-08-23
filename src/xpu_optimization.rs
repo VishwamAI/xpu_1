@@ -693,7 +693,7 @@ impl MLModel for DefaultMLModel {
 
     fn set_policy(&mut self, policy: &str) -> Result<(), XpuOptimizerError> {
         match policy {
-            "default" | "aggressive" | "conservative" => {
+            "default" | "aggressive" | "conservative" | "ml-driven" => {
                 self.policy = policy.to_string();
                 log::info!("Setting DefaultMLModel policy to: {}", policy);
                 Ok(())

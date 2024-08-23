@@ -136,20 +136,39 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
     };
 
     let cloud_offloading_policy = match config["cloud_offloading_policy"].as_str() {
-        Some(s) => match s.to_lowercase().as_str() {
-            "default" => CloudOffloadingPolicy::Default,
-            "always" => CloudOffloadingPolicy::Always,
-            "never" => CloudOffloadingPolicy::Never,
-            _ => return Err(XpuOptimizerError::ConfigError(format!("Invalid cloud_offloading_policy: {}", s))),
+        Some(s) => {
+            let policy = s.to_lowercase();
+            match policy.as_str() {
+                "default" => CloudOffloadingPolicy::Default,
+                "always" => CloudOffloadingPolicy::Always,
+                "never" => CloudOffloadingPolicy::Never,
+                _ => {
+                    log::warn!("Invalid cloud_offloading_policy: {}. Using default.", s);
+                    CloudOffloadingPolicy::Default
+                }
+            }
         },
-        None => CloudOffloadingPolicy::Default,
+        None => {
+            log::info!("cloud_offloading_policy not specified. Using default.");
+            CloudOffloadingPolicy::Default
+        },
     };
 
     let adaptive_optimization_policy = match config["adaptive_optimization_policy"].as_str() {
-        Some("default") => "default".to_string(),
-        Some("ml-driven") => "ml-driven".to_string(),
-        Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid adaptive_optimization_policy: {}", s))),
-        None => "default".to_string(),
+        Some(s) => {
+            let policy = s.to_lowercase();
+            match policy.as_str() {
+                "default" | "aggressive" | "conservative" | "ml-driven" => policy,
+                _ => {
+                    log::warn!("Invalid adaptive_optimization_policy: {}. Using default.", s);
+                    "default".to_string()
+                }
+            }
+        },
+        None => {
+            log::info!("adaptive_optimization_policy not specified. Using default.");
+            "default".to_string()
+        },
     };
 
     Ok(XpuOptimizerConfig {

@@ -98,6 +98,12 @@ fn test_configure_xpu_manager() {
         ("Default", CloudOffloadingPolicy::Default),
     ];
 
+    // Test valid adaptive optimization policies
+    let adaptive_policies = vec![
+        "default",
+        "ml-driven",
+    ];
+
     for (policy_str, expected_policy) in test_configs {
         let config_path = temp_dir.path().join(format!("test_config_{}.json", policy_str));
         std::fs::write(
