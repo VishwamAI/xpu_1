@@ -1,6 +1,7 @@
 pub mod adaptive_optimization;
 pub mod cloud_offloading;
 pub mod cluster_management;
+pub mod data_pipeline;
 pub mod distributed_memory;
 pub mod memory_management;
 pub mod ml_models;
@@ -23,6 +24,7 @@ pub mod xpu_optimization;
 pub use adaptive_optimization::AdaptiveOptimizer;
 pub use cloud_offloading::{CloudOffloader, CloudOffloadingPolicy};
 pub use cluster_management::{ClusterManager, ClusterNode, LoadBalancer, NodeStatus};
+pub use data_pipeline::{DataPipeline, InputStreamConfig, PreprocessingConfig, OutputStreamConfig};
 pub use distributed_memory::DistributedMemoryManager;
 pub use memory_management::{MemoryManager, MemoryStrategy, MemoryManagerType};
 pub use ml_models::MLModel;

@@ -18,6 +18,7 @@ impl FPGACore {
                 processing_power,
                 power_state: PowerState::Normal,
                 energy_profile: EnergyProfile::default(),
+                unit_type_match: vec![ProcessingUnitType::FPGA],
             },
         }
     }
@@ -70,9 +71,14 @@ impl ProcessingUnitTrait for FPGACore {
         Ok(self.processing_unit.current_load.as_secs_f64() / self.processing_unit.processing_power)
     }
 
+    fn get_unit_type_match(&self, task_unit_type: &ProcessingUnitType) -> Result<bool, XpuOptimizerError> {
+        Ok(self.processing_unit.unit_type == *task_unit_type)
+    }
+
     fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
-        Ok(task.unit_type == ProcessingUnitType::FPGA &&
-           self.processing_unit.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_unit.processing_power))
+        let unit_type_match = self.get_unit_type_match(&task.unit_type)?;
+        let has_capacity = self.get_available_capacity()? >= task.execution_time;
+        Ok(unit_type_match && has_capacity)
     }
 
     fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {

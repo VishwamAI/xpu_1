@@ -1,4 +1,4 @@
-use crate::task_scheduling::{Task, ProcessingUnit};
+use crate::task_scheduling::{Task, ProcessingUnit, ProcessingUnitType};
 use crate::XpuOptimizerError;
 use std::collections::HashMap;
 
@@ -46,6 +46,32 @@ pub struct ClusterNode {
     pub processing_units: Vec<ProcessingUnit>,
     pub status: NodeStatus,
     pub current_load: f32,
+    pub unit_type_match: Vec<ProcessingUnitType>,
+}
+
+impl ClusterNode {
+    pub fn new(id: String, ip_address: String, processing_units: Vec<ProcessingUnit>, status: NodeStatus) -> Self {
+        let unit_type_match = processing_units.iter()
+            .map(|unit| unit.unit_type.clone())
+            .collect();
+
+        ClusterNode {
+            id,
+            ip_address,
+            processing_units,
+            status,
+            current_load: 0.0,
+            unit_type_match,
+        }
+    }
+
+    pub fn get_unit_type_match(&self) -> &Vec<ProcessingUnitType> {
+        &self.unit_type_match
+    }
+
+    pub fn update_load(&mut self, new_load: f32) {
+        self.current_load = new_load;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

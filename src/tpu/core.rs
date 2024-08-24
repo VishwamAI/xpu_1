@@ -68,9 +68,14 @@ impl ProcessingUnitTrait for TPU {
         Ok(self.current_load.as_secs_f64() / self.processing_power)
     }
 
+    fn get_unit_type_match(&self, task_unit_type: &ProcessingUnitType) -> Result<bool, XpuOptimizerError> {
+        Ok(self.unit_type == *task_unit_type)
+    }
+
     fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
-        Ok(task.unit_type == ProcessingUnitType::TPU &&
-           self.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_power))
+        let unit_type_match = self.get_unit_type_match(&task.unit_type)?;
+        let has_capacity = self.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_power);
+        Ok(unit_type_match && has_capacity)
     }
 
     fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {

@@ -30,6 +30,17 @@ pub struct TaskPrediction {
     pub recommended_processing_unit: ProcessingUnitType,
 }
 
+impl Default for TaskPrediction {
+    fn default() -> Self {
+        TaskPrediction {
+            task_id: 0,
+            estimated_duration: Duration::default(),
+            estimated_resource_usage: 0,
+            recommended_processing_unit: ProcessingUnitType::CPU,
+        }
+    }
+}
+
 pub trait TaskDataManager {
     fn add_execution_data(&mut self, data: TaskExecutionData);
     fn get_historical_data(&self) -> Vec<HistoricalTaskData>;
