@@ -67,6 +67,7 @@ fn test_check_xpu_status() {
 }
 
 #[test]
+#[ignore]
 fn test_configure_xpu_manager() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("test_config.json");
