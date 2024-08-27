@@ -136,10 +136,12 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
     };
 
     let cloud_offloading_policy = match config["cloud_offloading_policy"].as_str() {
-        Some("default") => CloudOffloadingPolicy::Default,
-        Some("always") => CloudOffloadingPolicy::Always,
-        Some("never") => CloudOffloadingPolicy::Never,
-        Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid cloud_offloading_policy: {}", s))),
+        Some(s) => match s.to_lowercase().as_str() {
+            "default" => CloudOffloadingPolicy::Default,
+            "always" => CloudOffloadingPolicy::Always,
+            "never" => CloudOffloadingPolicy::Never,
+            _ => return Err(XpuOptimizerError::ConfigError(format!("Invalid cloud_offloading_policy: {}", s))),
+        },
         None => CloudOffloadingPolicy::Default,
     };
 
@@ -315,41 +317,44 @@ pub fn stop_xpu_manager() -> Result<(), XpuOptimizerError> {
 }
 
 pub fn configure_xpu_manager(config_file: &str) -> Result<XpuOptimizer, XpuOptimizerError> {
-    let config = parse_config_file(config_file)?;
+    let config = parse_config_file(config_file).map_err(|e| {
+        log::error!("Failed to parse config file: {}", e);
+        XpuOptimizerError::ConfigError(format!("Failed to parse config file: {}", e))
+    })?;
 
-    println!("Applying configuration:");
-    println!("  Number of processing units: {}", config.num_processing_units);
-    println!("  Memory pool size: {}", config.memory_pool_size);
-    println!("  Scheduler type: {:?}", config.scheduler_type);
-    println!("  Memory manager type: {:?}", config.memory_manager_type);
-    println!("  Power management policy: {:?}", config.power_management_policy);
-    println!("  Cloud offloading policy: {:?}", config.cloud_offloading_policy);
-    println!("  Adaptive optimization policy: {}", config.adaptive_optimization_policy);
+    log::info!("Applying configuration:");
+    log::info!("  Number of processing units: {}", config.num_processing_units);
+    log::info!("  Memory pool size: {}", config.memory_pool_size);
+    log::info!("  Scheduler type: {:?}", config.scheduler_type);
+    log::info!("  Memory manager type: {:?}", config.memory_manager_type);
+    log::info!("  Power management policy: {:?}", config.power_management_policy);
+    log::info!("  Cloud offloading policy: {:?}", config.cloud_offloading_policy);
+    log::info!("  Adaptive optimization policy: {}", config.adaptive_optimization_policy);
 
-    let mut optimizer = XpuOptimizer::new(config.clone())?;
+    let mut optimizer = XpuOptimizer::new(config.clone()).map_err(|e| {
+        log::error!("Failed to create XpuOptimizer: {}", e);
+        XpuOptimizerError::InitializationError(format!("Failed to create XpuOptimizer: {}", e))
+    })?;
 
     // Apply specific configurations
-    optimizer.set_num_processing_units(config.num_processing_units)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set number of processing units: {}", e)))?;
+    let config_steps = [
+        ("number of processing units", optimizer.set_num_processing_units(config.num_processing_units)),
+        ("memory pool size", optimizer.set_memory_pool_size(config.memory_pool_size)),
+        ("scheduler type", optimizer.set_scheduler_type(config.scheduler_type)),
+        ("memory manager type", optimizer.set_memory_manager_type(config.memory_manager_type)),
+        ("power management policy", optimizer.set_power_management_policy(config.power_management_policy)),
+        ("cloud offloading policy", optimizer.set_cloud_offloading_policy(config.cloud_offloading_policy)),
+        ("adaptive optimization policy", optimizer.set_adaptive_optimization_policy(&config.adaptive_optimization_policy)),
+    ];
 
-    optimizer.set_memory_pool_size(config.memory_pool_size)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set memory pool size: {}", e)))?;
+    for (step_name, result) in config_steps.iter() {
+        if let Err(e) = result {
+            let error_msg = format!("Failed to set {}: {}", step_name, e);
+            log::error!("{}", error_msg);
+            return Err(XpuOptimizerError::ConfigError(error_msg));
+        }
+    }
 
-    optimizer.set_scheduler_type(config.scheduler_type)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set scheduler type: {}", e)))?;
-
-    optimizer.set_memory_manager_type(config.memory_manager_type)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set memory manager type: {}", e)))?;
-
-    optimizer.set_power_management_policy(config.power_management_policy)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set power management policy: {}", e)))?;
-
-    optimizer.set_cloud_offloading_policy(config.cloud_offloading_policy)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set cloud offloading policy: {}", e)))?;
-
-    optimizer.set_adaptive_optimization_policy(&config.adaptive_optimization_policy)
-        .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to set adaptive optimization policy: {}", e)))?;
-
-    println!("Configuration applied successfully.");
+    log::info!("Configuration applied successfully.");
     Ok(optimizer)
 }

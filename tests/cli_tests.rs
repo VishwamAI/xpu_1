@@ -78,7 +78,7 @@ fn test_configure_xpu_manager() {
             "memory_pool_size": 2048,
             "scheduler_type": "LoadBalancing",
             "memory_manager_type": "Dynamic",
-            "power_management_policy": "Aggressive",
+            "power_management_policy": "default",
             "cloud_offloading_policy": "Always",
             "adaptive_optimization_policy": "ml-driven"
         }
@@ -86,20 +86,76 @@ fn test_configure_xpu_manager() {
     )
     .unwrap();
 
-    let result = configure_xpu_manager(config_path.to_str().unwrap());
-    assert!(result.is_ok());
+    // Initialize the logger for testing
+    let _ = env_logger::builder().is_test(true).try_init();
 
-    let optimizer = result.unwrap();
-    assert_eq!(optimizer.config.num_processing_units, 8);
-    assert_eq!(optimizer.config.memory_pool_size, 2048);
-    assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
-    assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
-    assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Aggressive));
-    assert!(matches!(optimizer.config.cloud_offloading_policy, CloudOffloadingPolicy::Always));
-    assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
+    // Test valid configurations
+    let test_configs = vec![
+        ("Always", CloudOffloadingPolicy::Always),
+        ("ALWAYS", CloudOffloadingPolicy::Always),
+        ("always", CloudOffloadingPolicy::Always),
+        ("Never", CloudOffloadingPolicy::Never),
+        ("Default", CloudOffloadingPolicy::Default),
+    ];
 
-    assert_eq!(optimizer.processing_units.len(), 8);
-    assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
+    for (policy_str, expected_policy) in test_configs {
+        let config_path = temp_dir.path().join(format!("test_config_{}.json", policy_str));
+        std::fs::write(
+            &config_path,
+            format!(r#"
+            {{
+                "num_processing_units": 8,
+                "memory_pool_size": 2048,
+                "scheduler_type": "LoadBalancing",
+                "memory_manager_type": "Dynamic",
+                "power_management_policy": "default",
+                "cloud_offloading_policy": "{}",
+                "adaptive_optimization_policy": "ml-driven"
+            }}
+            "#, policy_str),
+        ).unwrap();
+
+        let result = configure_xpu_manager(config_path.to_str().unwrap());
+        assert!(result.is_ok(), "configure_xpu_manager failed for '{}' policy: {:?}", policy_str, result.err());
+
+        let optimizer = result.unwrap();
+        assert_eq!(optimizer.config.num_processing_units, 8);
+        assert_eq!(optimizer.config.memory_pool_size, 2048);
+        assert!(matches!(optimizer.config.scheduler_type, SchedulerType::LoadBalancing));
+        assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
+        assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Default));
+        assert!(matches!(optimizer.config.cloud_offloading_policy, expected_policy));
+        assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
+
+        assert_eq!(optimizer.processing_units.len(), 8);
+        assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
+    }
+
+    // Test with invalid configuration
+    let invalid_config_path = temp_dir.path().join("invalid_config.json");
+    std::fs::write(
+        &invalid_config_path,
+        r#"
+        {
+            "num_processing_units": 0,
+            "memory_pool_size": 0,
+            "scheduler_type": "InvalidType",
+            "memory_manager_type": "InvalidType",
+            "power_management_policy": "InvalidPolicy",
+            "cloud_offloading_policy": "InvalidPolicy",
+            "adaptive_optimization_policy": "invalid"
+        }
+        "#,
+    )
+    .unwrap();
+
+    let invalid_result = configure_xpu_manager(invalid_config_path.to_str().unwrap());
+    assert!(invalid_result.is_err(), "Expected error for invalid configuration");
+    if let Err(XpuOptimizerError::ConfigError(err_msg)) = invalid_result {
+        assert!(err_msg.contains("Invalid"), "Error message should mention invalid configuration");
+    } else {
+        panic!("Expected ConfigError for invalid configuration");
+    }
 }
 
 #[test]
