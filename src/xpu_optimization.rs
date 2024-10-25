@@ -672,7 +672,7 @@ impl LoadBalancer for DefaultLoadBalancer {
         tasks: &[Task],
         nodes: &[ClusterNode],
     ) -> Result<HashMap<String, Vec<Task>>, XpuOptimizerError> {
-        let mut distribution = HashMap::new();
+        let mut distribution: HashMap<String, Vec<Task>> = HashMap::new();
         let active_nodes: Vec<_> = nodes
             .iter()
             .filter(|n| n.status == NodeStatus::Active)
@@ -688,7 +688,7 @@ impl LoadBalancer for DefaultLoadBalancer {
             let node = &active_nodes[i % active_nodes.len()];
             distribution
                 .entry(node.id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(task.clone());
         }
 
@@ -924,7 +924,7 @@ impl XpuOptimizer {
 
         // Check if session is expired
         let session = self.sessions.get(&token)
-            .ok_or_else(|| XpuOptimizerError::AuthenticationError("Session not found".to_string()))?;
+            .ok_or(XpuOptimizerError::AuthenticationError("Session not found".to_string()))?;
 
         if session.expiration < chrono::Utc::now() {
             self.sessions.remove(&token);
@@ -1266,7 +1266,7 @@ impl XpuOptimizer {
                     .map(|ut| ut == *unit_type)
                     .unwrap_or(false)
             })
-            .ok_or_else(|| XpuOptimizerError::ProcessingUnitNotFound(unit_type.to_string()))?;
+            .ok_or(XpuOptimizerError::ProcessingUnitNotFound(unit_type.to_string()))?;
 
         let mut unit_guard = processing_unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
         let ut = unit_guard.get_unit_type()?;
@@ -1295,7 +1295,7 @@ impl XpuOptimizer {
     fn update_task_history(&mut self, task_id: usize, duration: Duration, success: bool) -> Result<(), XpuOptimizerError> {
         let task = self.task_queue.iter()
             .find(|t| t.id == task_id)
-            .ok_or_else(|| XpuOptimizerError::TaskNotFoundError(task_id))?;
+            .ok_or(XpuOptimizerError::TaskNotFoundError(task_id))?;
 
         let execution_data = TaskExecutionData {
             id: task_id,
@@ -1332,7 +1332,7 @@ impl XpuOptimizer {
                     if !capacity.is_zero() {
                         units_by_type
                             .entry(unit_type)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((idx, capacity.as_secs()));
                     }
                 }
@@ -1391,12 +1391,12 @@ impl XpuOptimizer {
 
         // Schedule tasks using round-robin with type awareness and capacity checking
         for task in &self.task_queue {
-            let unit_indices = units_by_type.get_mut(&task.unit_type).ok_or_else(|| {
+            let unit_indices = units_by_type.get_mut(&task.unit_type).ok_or(
                 XpuOptimizerError::SchedulingError(format!(
                     "No units available for task {} of type {:?}",
                     task.id, task.unit_type
                 ))
-            })?;
+            )?;
 
             // Sort units by available capacity
             unit_indices.sort_by(|(_, a_cap), (_, b_cap)| b_cap.cmp(a_cap));
@@ -1456,9 +1456,7 @@ impl XpuOptimizer {
                         .and_then(|guard| guard.get_current_load())
                         .unwrap_or(Duration::MAX)
                 })
-                .ok_or_else(|| {
-                    XpuOptimizerError::SchedulingError("No suitable processing unit available".to_string())
-                })?;
+                .ok_or(XpuOptimizerError::SchedulingError("No suitable processing unit available".to_string()))?;
 
             let mut best_unit_guard = best_unit.lock()
                 .map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
@@ -1487,7 +1485,7 @@ impl XpuOptimizer {
                 })
                 .min_by_key(|(_, load)| *load + predicted_duration)
                 .map(|(unit, _)| unit)
-                .ok_or_else(|| XpuOptimizerError::SchedulingError("No suitable processing unit available".to_string()))?;
+                .ok_or(XpuOptimizerError::SchedulingError("No suitable processing unit available".to_string()))?;
 
             let mut best_unit_guard = best_unit.lock()
                 .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock best unit: {}", e)))?;
@@ -1715,7 +1713,7 @@ impl XpuOptimizer {
     fn optimize_schedule_based_on_predictions(&mut self, prediction: TaskPrediction) -> Result<(), XpuOptimizerError> {
         // Implement the logic for optimizing the schedule based on predictions
         let task = self.task_queue.iter_mut().find(|t| t.id == prediction.task_id)
-            .ok_or_else(|| XpuOptimizerError::TaskNotFoundError(prediction.task_id))?;
+            .ok_or(XpuOptimizerError::TaskNotFoundError(prediction.task_id))?;
 
         task.estimated_duration = prediction.estimated_duration;
         task.estimated_resource_usage = prediction.estimated_resource_usage;
@@ -1842,7 +1840,7 @@ impl XpuOptimizer {
     ) -> Result<String, XpuOptimizerError> {
         let user = self.users
             .get(username)
-            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+            .ok_or(XpuOptimizerError::UserNotFoundError(username.to_string()))?;
 
         let parsed_hash = PasswordHash::new(&user.password_hash)
             .map_err(|e| XpuOptimizerError::AuthenticationError(e.to_string()))?;
@@ -1913,13 +1911,13 @@ impl XpuOptimizer {
         self.users
             .get(&username)
             .cloned()
-            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username))
+            .ok_or(XpuOptimizerError::UserNotFoundError(username))
     }
 
     fn create_session(&mut self, username: &str) -> Result<String, XpuOptimizerError> {
         let user = self.users
             .get(username)
-            .ok_or_else(|| XpuOptimizerError::UserNotFoundError(username.to_string()))?;
+            .ok_or(XpuOptimizerError::UserNotFoundError(username.to_string()))?;
         let token = self.generate_jwt_token(username, &user.role)?;
         let expiration = Utc::now() + chrono::Duration::hours(24);
         self.sessions.insert(
