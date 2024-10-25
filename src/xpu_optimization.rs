@@ -989,10 +989,6 @@ impl XpuOptimizer {
 
         self.report_metrics()?;
         self.adaptive_optimization()?;
-        info!("Deallocating memory for {} completed tasks...", self.scheduled_tasks.len());
-        let completed_tasks: Vec<_> = self.scheduled_tasks.keys().cloned().collect();
-        self.deallocate_memory_for_completed_tasks(&completed_tasks)?;
-        self.update_system_status()?;
 
         info!("XPU optimization run completed successfully");
         Ok(())
