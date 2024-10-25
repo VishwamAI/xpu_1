@@ -1,4 +1,4 @@
-use crate::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, UserRole, Permission};
+use xpu_manager_rust::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, UserRole, Permission};
 use std::sync::Once;
 
 static INIT: Once = Once::new();
