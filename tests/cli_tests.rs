@@ -96,6 +96,7 @@ fn test_configure_xpu_manager() {
         ("always", CloudOffloadingPolicy::Always),
         ("Never", CloudOffloadingPolicy::Never),
         ("Default", CloudOffloadingPolicy::Default),
+        ("ml-driven", CloudOffloadingPolicy::Default), // Add test case for ml-driven policy
     ];
 
     for (policy_str, expected_policy) in test_configs {
