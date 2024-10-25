@@ -79,8 +79,8 @@ fn test_configure_xpu_manager() {
             "scheduler_type": "LoadBalancing",
             "memory_manager_type": "Dynamic",
             "power_management_policy": "default",
-            "cloud_offloading_policy": "Always",
-            "adaptive_optimization_policy": "ml-driven"
+            "cloud_offloading_policy": "Default",
+            "adaptive_optimization_policy": "default"
         }
         "#,
     )
@@ -91,11 +91,13 @@ fn test_configure_xpu_manager() {
 
     // Test valid configurations
     let test_configs = vec![
+        ("Default", CloudOffloadingPolicy::Default),
+        ("default", CloudOffloadingPolicy::Default),
+        ("DEFAULT", CloudOffloadingPolicy::Default),
         ("Always", CloudOffloadingPolicy::Always),
-        ("ALWAYS", CloudOffloadingPolicy::Always),
         ("always", CloudOffloadingPolicy::Always),
         ("Never", CloudOffloadingPolicy::Never),
-        ("Default", CloudOffloadingPolicy::Default),
+        ("never", CloudOffloadingPolicy::Never),
     ];
 
     for (policy_str, expected_policy) in test_configs {
@@ -110,7 +112,7 @@ fn test_configure_xpu_manager() {
                 "memory_manager_type": "Dynamic",
                 "power_management_policy": "default",
                 "cloud_offloading_policy": "{}",
-                "adaptive_optimization_policy": "ml-driven"
+                "adaptive_optimization_policy": "default"
             }}
             "#, policy_str),
         ).unwrap();
@@ -125,7 +127,7 @@ fn test_configure_xpu_manager() {
         assert!(matches!(optimizer.config.memory_manager_type, MemoryManagerType::Dynamic));
         assert!(matches!(optimizer.config.power_management_policy, PowerManagementPolicy::Default));
         assert!(matches!(optimizer.config.cloud_offloading_policy, expected_policy));
-        assert_eq!(optimizer.config.adaptive_optimization_policy, "ml-driven");
+        assert_eq!(optimizer.config.adaptive_optimization_policy, "default");
 
         assert_eq!(optimizer.processing_units.len(), 8);
         assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
