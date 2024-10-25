@@ -39,6 +39,24 @@ mod tests {
         let config = XpuOptimizerConfig::default();
         let mut optimizer = XpuOptimizer::new(config)?;
 
+        // Initialize test environment and set up authentication
+        println!("Starting test environment initialization...");
+        initialize_test_env(&mut optimizer)?;
+        println!("Test environment initialized successfully");
+
+        println!("Setting up test user and generating token...");
+        let token = setup_test_user(&mut optimizer)?;
+        println!("Generated token: {}", token);
+
+        println!("Setting current token...");
+        match optimizer.set_current_token(token.clone()) {
+            Ok(_) => println!("Token set successfully"),
+            Err(e) => {
+                println!("Failed to set token: {:?}", e);
+                return Err(Box::new(e));
+            }
+        };
+
         let task = Task::new(
             1,
             1,
@@ -49,8 +67,13 @@ mod tests {
             ProcessingUnitType::CPU,
         );
 
-        optimizer.add_task(task, "")?;
+        optimizer.add_task(task, &token)?;
         assert_eq!(optimizer.task_queue.len(), 1);
+
+        // Clean up test data
+        println!("Cleaning up test data...");
+        cleanup_test_data(&mut optimizer)?;
+        println!("Test completed successfully");
         Ok(())
     }
 
@@ -61,6 +84,24 @@ mod tests {
             ..Default::default()
         };
         let mut optimizer = XpuOptimizer::new(config)?;
+
+        // Initialize test environment and set up authentication
+        println!("Starting test environment initialization...");
+        initialize_test_env(&mut optimizer)?;
+        println!("Test environment initialized successfully");
+
+        println!("Setting up test user and generating token...");
+        let token = setup_test_user(&mut optimizer)?;
+        println!("Generated token: {}", token);
+
+        println!("Setting current token...");
+        match optimizer.set_current_token(token.clone()) {
+            Ok(_) => println!("Token set successfully"),
+            Err(e) => {
+                println!("Failed to set token: {:?}", e);
+                return Err(Box::new(e));
+            }
+        };
 
         // Add multiple tasks
         for i in 1..=5 {
@@ -73,12 +114,17 @@ mod tests {
                 false,
                 ProcessingUnitType::CPU,
             );
-            optimizer.add_task(task, "")?;
+            optimizer.add_task(task, &token)?;
         }
 
         assert_eq!(optimizer.task_queue.len(), 5);
         optimizer.run()?;
         assert!(optimizer.task_queue.is_empty());
+
+        // Clean up test data
+        println!("Cleaning up test data...");
+        cleanup_test_data(&mut optimizer)?;
+        println!("Test completed successfully");
         Ok(())
     }
 
