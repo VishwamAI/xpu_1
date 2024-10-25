@@ -74,7 +74,7 @@ impl MemoryManager for SimpleMemoryManager {
             return Err(MemoryError::InsufficientMemory);
         }
 
-        let mut allocated = false;
+        let mut _allocated = false;
         let mut block_to_remove = None;
         let mut block_addr_to_use = None;
         let mut original_block_size = 0;
@@ -87,7 +87,7 @@ impl MemoryManager for SimpleMemoryManager {
                 if blocks.len() == 1 {
                     block_to_remove = Some(*block_size);
                 }
-                allocated = true;
+                _allocated = true;
                 break;
             }
         }
@@ -129,7 +129,7 @@ impl MemoryManager for SimpleMemoryManager {
 
     fn deallocate(&mut self, size: usize) -> Result<(), MemoryError> {
         // Find the block address for this size
-        if let Some((&block_addr, &block_size)) = self.allocated_blocks
+        if let Some((&block_addr, &_block_size)) = self.allocated_blocks
             .iter()
             .find(|(_, &s)| s == size)
         {
@@ -222,7 +222,7 @@ impl MemoryManager for DynamicMemoryManager {
         let total_size = blocks_needed * self.block_size;
 
         if let Some(addresses) = self.memory_pool.get_mut(&total_size) {
-            if let Some(_) = addresses.pop() {
+            if let Some(_freed_address) = addresses.pop() {
                 self.allocated_memory -= total_size;
                 Ok(())
             } else {
@@ -258,8 +258,6 @@ impl MemoryManager for DynamicMemoryManager {
         Ok(())
     }
 }
-
-// Remove duplicate implementation
 
 pub enum MemoryStrategy {
     Simple(SimpleMemoryManager),

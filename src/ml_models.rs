@@ -251,7 +251,7 @@ impl MachineLearningOptimizer for DefaultMLOptimizer {
     fn optimize(
         &self,
         historical_data: &[TaskExecutionData],
-        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
+        _processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
     ) -> Result<Scheduler, XpuOptimizerError> {
         let mut model = self.ml_model.lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?;

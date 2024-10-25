@@ -1,7 +1,8 @@
 use crate::power_management::{EnergyProfile, PowerState, PowerManagementError};
 use crate::XpuOptimizerError;
 use crate::ml_models::MLModel;
-use crate::task_data::HistoricalTaskData;
+use crate::task_data::{HistoricalTaskData, TaskExecutionData};
+use crate::TaskPrediction;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
@@ -17,6 +18,38 @@ pub enum ProcessingUnitType {
     NPU,
     FPGA,
     VPU,
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultMLModel;
+
+impl MLModel for DefaultMLModel {
+    fn predict(&self, _data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError> {
+        Ok(TaskPrediction {
+            task_id: 0,
+            estimated_duration: Duration::from_secs(1),
+            estimated_resource_usage: 1024,
+            recommended_processing_unit: ProcessingUnitType::CPU,
+        })
+    }
+
+    fn train(&mut self, _historical_data: &[TaskExecutionData]) -> Result<(), XpuOptimizerError> {
+        Ok(()) // Default implementation does no training
+    }
+
+    fn clone_box(&self) -> Arc<Mutex<dyn MLModel + Send + Sync>> {
+        Arc::new(Mutex::new(self.clone()))
+    }
+
+    fn set_policy(&mut self, _policy: &str) -> Result<(), XpuOptimizerError> {
+        Ok(()) // Default implementation ignores policy changes
+    }
+}
+
+impl Default for DefaultMLModel {
+    fn default() -> Self {
+        DefaultMLModel
+    }
 }
 
 impl Ord for ProcessingUnitType {
@@ -310,6 +343,12 @@ pub struct RoundRobinScheduler;
 
 impl RoundRobinScheduler {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for RoundRobinScheduler {
+    fn default() -> Self {
         RoundRobinScheduler
     }
 }
@@ -369,6 +408,12 @@ impl LoadBalancingScheduler {
     }
 }
 
+impl Default for LoadBalancingScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskScheduler for LoadBalancingScheduler {
     fn schedule(&self, tasks: &[Task], units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>]) -> Result<Vec<(Task, Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>)>, XpuOptimizerError> {
         let mut scheduled_tasks = Vec::new();
@@ -424,6 +469,12 @@ pub struct AIOptimizedScheduler {
 impl AIOptimizedScheduler {
     pub fn new(ml_model: Arc<Mutex<dyn MLModel + Send + Sync>>) -> Self {
         AIOptimizedScheduler { ml_model }
+    }
+}
+
+impl Default for AIOptimizedScheduler {
+    fn default() -> Self {
+        Self::new(Arc::new(Mutex::new(DefaultMLModel::default())))
     }
 }
 
@@ -519,9 +570,9 @@ pub fn calculate_optimization_metrics(
     };
     let average_load = completed_tasks
         .iter()
-        .try_fold(0.0, |acc, (_, unit)| -> Result<f64, XpuOptimizerError> {
+        .try_fold(0.0, |acc, (_, unit)| {
             let guard = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?;
-            guard.get_load_percentage().and_then(|load| Ok(acc + load))
+            Ok::<f64, XpuOptimizerError>(acc + guard.get_load_percentage().unwrap_or(0.0))
         })?;
     let average_load = if !completed_tasks.is_empty() {
         average_load / completed_tasks.len() as f64
