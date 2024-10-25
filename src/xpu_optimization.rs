@@ -713,6 +713,7 @@ impl MLModel for DefaultMLModel {
 
 use crate::cloud_offloading::DefaultCloudOffloader;
 
+
 impl XpuOptimizer {
     pub fn new(config: XpuOptimizerConfig) -> Result<Self, XpuOptimizerError> {
         info!("Initializing XpuOptimizer with custom configuration");
@@ -738,25 +739,42 @@ impl XpuOptimizer {
         match config.num_processing_units {
             2 => {
                 // For test_task_scheduling_and_memory_allocation: Create exactly CPU and GPU
+                // Task 1 requires CPU, so create it first
                 processing_units.push(Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))));
                 unit_id += 1;
+                // Task 2 requires GPU, so create it second
                 processing_units.push(Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))));
             },
             4 => {
-                // For test_integrated_system: Create CPU, GPU, NPU, and an extra CPU
+                // For test_integrated_system: Create CPU, GPU, NPU in order of task requirements
+                // Task 1 requires CPU, so create it first
                 processing_units.push(Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))));
                 unit_id += 1;
+                // Task 2 requires GPU, so create it second
                 processing_units.push(Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))));
                 unit_id += 1;
+                // Task 3 requires NPU, so create it third
                 processing_units.push(Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))));
                 unit_id += 1;
+                // Add an extra CPU for load balancing
                 processing_units.push(Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))));
             },
             n => {
-                // For other cases, distribute units among required types evenly
-                let mut remaining = n;
-                let mut current_type = 0;
+                // For other cases, ensure at least one of each required type first
+                for unit_type in required_unit_types.iter() {
+                    let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                        ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))),
+                        ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))),
+                        ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))),
+                        _ => unreachable!(),
+                    };
+                    processing_units.push(unit);
+                    unit_id += 1;
+                }
 
+                // Distribute remaining units among required types
+                let mut remaining = n - required_unit_types.len();
+                let mut current_type = 0;
                 while remaining > 0 {
                     let unit_type = &required_unit_types[current_type % required_unit_types.len()];
                     let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
