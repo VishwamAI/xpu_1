@@ -133,30 +133,37 @@ fn test_configure_xpu_manager() {
         assert!(matches!(optimizer.scheduler, Scheduler::LoadBalancing(_)));
     }
 
-    // Test with invalid configuration
-    let invalid_config_path = temp_dir.path().join("invalid_config.json");
-    std::fs::write(
-        &invalid_config_path,
-        r#"
-        {
-            "num_processing_units": 0,
-            "memory_pool_size": 0,
-            "scheduler_type": "InvalidType",
-            "memory_manager_type": "InvalidType",
-            "power_management_policy": "InvalidPolicy",
-            "cloud_offloading_policy": "InvalidPolicy",
-            "adaptive_optimization_policy": "invalid"
-        }
-        "#,
-    )
-    .unwrap();
+    // Test with invalid configurations
+    let invalid_configs = vec![
+        ("ml-driven", "Invalid cloud_offloading_policy: ml-driven"),
+        ("InvalidPolicy", "Invalid cloud_offloading_policy: InvalidPolicy"),
+    ];
 
-    let invalid_result = configure_xpu_manager(invalid_config_path.to_str().unwrap());
-    assert!(invalid_result.is_err(), "Expected error for invalid configuration");
-    if let Err(XpuOptimizerError::ConfigError(err_msg)) = invalid_result {
-        assert!(err_msg.contains("Invalid"), "Error message should mention invalid configuration");
-    } else {
-        panic!("Expected ConfigError for invalid configuration");
+    for (invalid_policy, expected_error) in invalid_configs {
+        let invalid_config_path = temp_dir.path().join(format!("invalid_config_{}.json", invalid_policy));
+        std::fs::write(
+            &invalid_config_path,
+            format!(r#"
+            {{
+                "num_processing_units": 8,
+                "memory_pool_size": 2048,
+                "scheduler_type": "LoadBalancing",
+                "memory_manager_type": "Dynamic",
+                "power_management_policy": "default",
+                "cloud_offloading_policy": "{}",
+                "adaptive_optimization_policy": "default"
+            }}
+            "#, invalid_policy),
+        ).unwrap();
+
+        let invalid_result = configure_xpu_manager(invalid_config_path.to_str().unwrap());
+        assert!(invalid_result.is_err(), "Expected error for invalid policy: {}", invalid_policy);
+        if let Err(XpuOptimizerError::ConfigError(err_msg)) = invalid_result {
+            assert!(err_msg.contains(expected_error),
+                "Error message '{}' should contain '{}'", err_msg, expected_error);
+        } else {
+            panic!("Expected ConfigError for invalid policy: {}", invalid_policy);
+        }
     }
 }
 

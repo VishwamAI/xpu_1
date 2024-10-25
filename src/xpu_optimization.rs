@@ -725,7 +725,7 @@ impl XpuOptimizer {
             ProcessingUnitType::NPU,
         ];
 
-        let additional_unit_types = [
+        let _additional_unit_types = [
             ProcessingUnitType::TPU,
             ProcessingUnitType::LPU,
             ProcessingUnitType::VPU,
@@ -761,32 +761,34 @@ impl XpuOptimizer {
             },
             n => {
                 // For other cases, ensure at least one of each required type first
+                let mut type_counts: HashMap<ProcessingUnitType, usize> = HashMap::new();
+
+                // Count how many units of each type we need based on task requirements
                 for unit_type in required_unit_types.iter() {
-                    let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
-                        ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))),
-                        ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))),
-                        ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))),
-                        _ => unreachable!(),
-                    };
-                    processing_units.push(unit);
-                    unit_id += 1;
+                    // Start with at least one of each required type
+                    type_counts.insert(unit_type.clone(), 1);
                 }
 
-                // Distribute remaining units among required types
-                let mut remaining = n - required_unit_types.len();
-                let mut current_type = 0;
-                while remaining > 0 {
-                    let unit_type = &required_unit_types[current_type % required_unit_types.len()];
-                    let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
-                        ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))),
-                        ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))),
-                        ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))),
-                        _ => unreachable!(),
-                    };
-                    processing_units.push(unit);
-                    unit_id += 1;
-                    remaining -= 1;
-                    current_type += 1;
+                // Calculate minimum units needed of each type
+                let min_units_per_type = (n as f32 / required_unit_types.len() as f32).ceil() as usize;
+
+                // Ensure we have at least the minimum number of each type
+                for unit_type in required_unit_types.iter() {
+                    *type_counts.get_mut(unit_type).unwrap() = min_units_per_type;
+                }
+
+                // Create units according to the calculated distribution
+                for (unit_type, count) in type_counts.iter() {
+                    for _ in 0..*count {
+                        let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                            ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))),
+                            ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))),
+                            ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))),
+                            _ => unreachable!(),
+                        };
+                        processing_units.push(unit);
+                        unit_id += 1;
+                    }
                 }
             }
         }
@@ -1077,26 +1079,111 @@ impl XpuOptimizer {
     }
 
     fn round_robin_scheduling(&mut self) -> Result<(), XpuOptimizerError> {
-        let mut current_unit_index = 0;
-
         self.scheduled_tasks.clear();
+
+        // Track last used index for each unit type to implement true round-robin
+        let mut type_indices: HashMap<ProcessingUnitType, usize> = HashMap::new();
+
+        // First pass: validate that we have at least one unit of each required type
+        let mut required_types: HashMap<ProcessingUnitType, usize> = HashMap::new();
         for task in &self.task_queue {
+            *required_types.entry(task.unit_type.clone()).or_insert(0) += 1;
+        }
+
+        // Verify unit availability and capacity before scheduling
+        for (unit_type, required_count) in &required_types {
+            let available_units: Vec<usize> = self.processing_units.iter()
+                .enumerate()
+                .filter(|(_, unit)| {
+                    if let Ok(guard) = unit.lock() {
+                        if let Ok(unit_t) = guard.get_unit_type() {
+                            if let Ok(capacity) = guard.get_available_capacity() {
+                                return unit_t == *unit_type && !capacity.is_zero();
+                            }
+                        }
+                    }
+                    false
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+
+            if available_units.is_empty() {
+                return Err(XpuOptimizerError::SchedulingError(
+                    format!("No processing units of required type {:?} available", unit_type)
+                ));
+            }
+
+            // Ensure we have enough units that can handle tasks of this type
+            let capable_units = available_units.iter()
+                .filter(|&&idx| {
+                    if let Ok(guard) = self.processing_units[idx].lock() {
+                        if let Ok(capacity) = guard.get_available_capacity() {
+                            if let Ok(unit_t) = guard.get_unit_type() {
+                                return !capacity.is_zero() && unit_t == *unit_type;
+                            }
+                        }
+                    }
+                    false
+                })
+                .count();
+
+            if capable_units < *required_count {
+                return Err(XpuOptimizerError::SchedulingError(
+                    format!("Insufficient available units of type {:?}. Required: {}, Available: {}",
+                           unit_type, required_count, capable_units)
+                ));
+            }
+        }
+
+        // Second pass: perform round-robin scheduling with type awareness
+        for task in &self.task_queue {
+            let matching_units: Vec<usize> = self.processing_units.iter()
+                .enumerate()
+                .filter(|(_, unit)| {
+                    if let Ok(guard) = unit.lock() {
+                        if let Ok(unit_type) = guard.get_unit_type() {
+                            if let Ok(capacity) = guard.get_available_capacity() {
+                                if let Ok(can_handle) = guard.can_handle_task(task) {
+                                    return unit_type == task.unit_type && !capacity.is_zero() && can_handle;
+                                }
+                            }
+                        }
+                    }
+                    false
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+
+            let start_idx = type_indices
+                .get(&task.unit_type)
+                .copied()
+                .unwrap_or(0) % matching_units.len();
+
             let mut assigned = false;
-            for _ in 0..self.processing_units.len() {
-                let unit = &self.processing_units[current_unit_index];
-                if let Ok(can_handle) = unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?.can_handle_task(task) {
-                    if can_handle {
-                        unit.lock().map_err(|e| XpuOptimizerError::LockError(e.to_string()))?.assign_task(task)?;
-                        self.scheduled_tasks.push(task.clone());
-                        current_unit_index = (current_unit_index + 1) % self.processing_units.len();
-                        assigned = true;
-                        break;
+            for offset in 0..matching_units.len() {
+                let current_idx = (start_idx + offset) % matching_units.len();
+                let unit_idx = matching_units[current_idx];
+                let unit = &self.processing_units[unit_idx];
+
+                if let Ok(mut guard) = unit.lock() {
+                    if let Ok(capacity) = guard.get_available_capacity() {
+                        if !capacity.is_zero() && guard.can_handle_task(task).unwrap_or(false) {
+                            if let Ok(()) = guard.assign_task(task) {
+                                self.scheduled_tasks.push(task.clone());
+                                type_indices.insert(task.unit_type.clone(), (current_idx + 1) % matching_units.len());
+                                assigned = true;
+                                break;
+                            }
+                        }
                     }
                 }
-                current_unit_index = (current_unit_index + 1) % self.processing_units.len();
             }
+
             if !assigned {
-                warn!("No suitable processing unit found for task {}", task.id);
+                return Err(XpuOptimizerError::SchedulingError(
+                    format!("No suitable processing unit available for task {} of type {:?}",
+                           task.id, task.unit_type)
+                ));
             }
         }
 

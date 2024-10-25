@@ -62,7 +62,7 @@ impl ProcessingUnitTrait for NPU {
 
     fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
         Ok(task.unit_type == ProcessingUnitType::NPU &&
-           self.processing_unit.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_unit.processing_power))
+           self.processing_unit.current_load.saturating_add(task.execution_time) <= Duration::from_secs_f64(self.processing_unit.processing_power))
     }
 
     fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {
@@ -71,7 +71,7 @@ impl ProcessingUnitTrait for NPU {
             Ok(())
         } else {
             Err(XpuOptimizerError::ResourceAllocationError(
-                format!("NPU cannot handle task {}", task.id)
+                format!("NPU unit {} cannot handle task {} due to insufficient capacity or type mismatch", self.get_id(), task.id)
             ))
         }
     }
@@ -91,7 +91,7 @@ impl ProcessingUnitTrait for NPU {
     }
 
     fn execute_task(&mut self, task: &Task) -> Result<Duration, XpuOptimizerError> {
-        let processing_time = task.execution_time.div_f64(self.processing_unit.processing_power);
+        let processing_time = task.execution_time;
         self.assign_task(task)?;
         log::info!("NPU processed task {} in {:?}", task.id, processing_time);
         Ok(processing_time)

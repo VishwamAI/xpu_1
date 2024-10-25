@@ -63,16 +63,16 @@ impl ProcessingUnitTrait for CPU {
 
     fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
         Ok(task.unit_type == ProcessingUnitType::CPU &&
-           self.processing_unit.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_unit.processing_power))
+           self.processing_unit.current_load.saturating_add(task.execution_time) <= Duration::from_secs_f64(self.processing_unit.processing_power))
     }
 
     fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {
         if self.can_handle_task(task)? {
-            self.processing_unit.current_load += task.execution_time;
+            self.processing_unit.current_load = self.processing_unit.current_load.saturating_add(task.execution_time);
             Ok(())
         } else {
             Err(XpuOptimizerError::ResourceAllocationError(
-                format!("CPU cannot handle task {}", task.id)
+                format!("CPU unit {} cannot handle task {} due to insufficient capacity or type mismatch", self.get_id(), task.id)
             ))
         }
     }
@@ -93,6 +93,7 @@ impl ProcessingUnitTrait for CPU {
 
     fn execute_task(&mut self, task: &Task) -> Result<Duration, XpuOptimizerError> {
         self.assign_task(task)?;
+        log::info!("CPU processed task {} in {:?}", task.id, task.execution_time);
         Ok(task.execution_time)
     }
 
