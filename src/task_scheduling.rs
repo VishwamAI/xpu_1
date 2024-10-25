@@ -474,7 +474,7 @@ impl AIOptimizedScheduler {
 
 impl Default for AIOptimizedScheduler {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(DefaultMLModel::default())))
+        Self::new(Arc::new(Mutex::new(DefaultMLModel::new())))
     }
 }
 

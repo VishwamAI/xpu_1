@@ -173,6 +173,12 @@ pub struct LatencyMonitor {
     end_times: Arc<Mutex<HashMap<usize, Instant>>>,
 }
 
+impl Default for LatencyMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LatencyMonitor {
     pub fn new() -> Self {
         LatencyMonitor {
@@ -239,12 +245,12 @@ pub enum UserRole {
     User,
 }
 
-impl ToString for UserRole {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserRole::Admin => "Admin".to_string(),
-            UserRole::Manager => "Manager".to_string(),
-            UserRole::User => "User".to_string(),
+            UserRole::Admin => write!(f, "Admin"),
+            UserRole::Manager => write!(f, "Manager"),
+            UserRole::User => write!(f, "User"),
         }
     }
 }
@@ -375,7 +381,7 @@ impl XpuOptimizer {
     }
 
     pub fn set_cloud_offloading_policy(&mut self, policy: CloudOffloadingPolicy) -> Result<(), XpuOptimizerError> {
-        self.config.cloud_offloading_policy = policy.clone();
+        self.config.cloud_offloading_policy = policy;
         let mut cloud_offloader = self.cloud_offloader.lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock cloud offloader: {}", e)))?;
         cloud_offloader.set_policy(policy);
@@ -2106,7 +2112,7 @@ impl XpuOptimizer {
         info!("Starting final cleanup of completed tasks...");
 
         for task in completed_tasks {
-            if let Some(_) = self.scheduled_tasks.remove(task) {
+            if self.scheduled_tasks.remove(task).is_some() {
                 info!("Removed task {} from scheduled tasks", task.id);
                 self.task_queue.retain(|t| t.id != task.id);
                 info!("Removed task {} from task queue", task.id);
