@@ -1118,6 +1118,7 @@ impl XpuOptimizer {
             match result {
                 Ok((task, duration)) => {
                     info!("Task {} completed in {:?}", task.id, duration);
+                    // Update task history immediately after completion
                     self.update_task_history(task.id, duration, true)?;
                     // Track completed tasks for memory deallocation
                     completed_tasks.push(task.clone());
@@ -1142,28 +1143,29 @@ impl XpuOptimizer {
             }
         }
 
-        // Deallocate memory for all completed tasks
-        self.deallocate_memory_for_completed_tasks(&completed_tasks)
-            .map_err(|e| {
-                error!("Failed to deallocate memory for completed tasks: {}", e);
-                XpuOptimizerError::MemoryDeallocationError(format!("Failed to deallocate memory: {}", e))
-            })?;
-
-        // Clear both scheduled_tasks and task_queue for completed tasks
-        for task in tasks_to_remove {
-            if let None = self.scheduled_tasks.remove(&task) {
-                warn!("Task {} was already removed from scheduled tasks", task.id);
-            }
-            self.task_queue.retain(|t| t.id != task.id);
+        // Deallocate memory for completed tasks
+        if !completed_tasks.is_empty() {
+            self.deallocate_memory_for_completed_tasks(&completed_tasks)
+                .map_err(|e| {
+                    error!("Failed to deallocate memory for completed tasks: {}", e);
+                    XpuOptimizerError::MemoryDeallocationError(format!("Failed to deallocate memory: {}", e))
+                })?;
         }
 
-        // Clear any remaining tasks in the queue that were scheduled
-        self.task_queue.clear();
-        self.scheduled_tasks.clear();
+        // Remove only completed tasks from scheduled_tasks and task_queue
+        for task in tasks_to_remove {
+            if let Some(_) = self.scheduled_tasks.remove(&task) {
+                info!("Removed task {} from scheduled tasks", task.id);
+                self.task_queue.retain(|t| t.id != task.id);
+                info!("Removed task {} from task queue", task.id);
+            } else {
+                warn!("Task {} was not found in scheduled tasks", task.id);
+            }
+        }
 
         info!("Successfully completed and cleaned up {} tasks", completed_tasks.len());
-        info!("Task queue cleared. Remaining tasks: {}", self.task_queue.len());
-        info!("Scheduled tasks cleared. Remaining tasks: {}", self.scheduled_tasks.len());
+        info!("Remaining tasks in queue: {}", self.task_queue.len());
+        info!("Remaining scheduled tasks: {}", self.scheduled_tasks.len());
         Ok(())
     }
 
