@@ -746,21 +746,25 @@ impl XpuOptimizer {
             unit_id += 1;
         }
 
-        // Then add remaining units up to the configured amount
+        // Then add remaining units, prioritizing required types first
         let remaining_units = config.num_processing_units.saturating_sub(required_unit_types.len());
-        let all_types = [required_unit_types.as_slice(), additional_unit_types.as_slice()].concat();
+        let mut units_added = 0;
 
-        for (i, unit_type) in all_types.iter().cycle().take(remaining_units).enumerate() {
-            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
-                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::TPU => Arc::new(Mutex::new(TPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::LPU => Arc::new(Mutex::new(LPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::VPU => Arc::new(Mutex::new(VPU::new(unit_id + i, default_processing_power))),
-                ProcessingUnitType::FPGA => Arc::new(Mutex::new(FPGACore::new(unit_id + i, default_processing_power))),
-            };
-            processing_units.push(unit);
+        // First phase: distribute among required types
+        while units_added < remaining_units {
+            for unit_type in required_unit_types.iter() {
+                if units_added >= remaining_units {
+                    break;
+                }
+                let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                    ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id + units_added, default_processing_power))),
+                    ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id + units_added, default_processing_power))),
+                    ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id + units_added, default_processing_power))),
+                    _ => unreachable!(),
+                };
+                processing_units.push(unit);
+                units_added += 1;
+            }
         }
 
         let ml_model: Arc<Mutex<dyn MLModel + Send + Sync>> = Arc::new(Mutex::new(SimpleRegressionModel::new()));
