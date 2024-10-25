@@ -981,7 +981,7 @@ impl XpuOptimizer {
         self.optimize_energy_efficiency()?;
 
         info!("Executing {} scheduled tasks...", self.scheduled_tasks.len());
-        self.execute_tasks()?;
+        let completed_tasks = self.execute_tasks()?;
         info!("Task execution completed. {} tasks in scheduled_tasks", self.scheduled_tasks.len());
 
         let total_duration = start_time.elapsed();
@@ -989,6 +989,9 @@ impl XpuOptimizer {
 
         self.report_metrics()?;
         self.adaptive_optimization()?;
+
+        // Perform final cleanup after all verifications are complete
+        self.cleanup_completed_tasks(&completed_tasks)?;
 
         info!("XPU optimization run completed successfully");
         Ok(())
@@ -1083,7 +1086,7 @@ impl XpuOptimizer {
         })
     }
 
-    fn execute_tasks(&mut self) -> Result<(), XpuOptimizerError> {
+    fn execute_tasks(&mut self) -> Result<Vec<Task>, XpuOptimizerError> {
         info!("Executing tasks on respective processing units...");
         info!("Initial task queue size: {}", self.task_queue.len());
         info!("Initial scheduled tasks size: {}", self.scheduled_tasks.len());
@@ -1139,30 +1142,24 @@ impl XpuOptimizer {
             }
         }
 
-        // Deallocate memory for completed tasks
+        // Deallocate memory for completed tasks but keep tasks in queues for verification
         if !completed_tasks.is_empty() {
             self.deallocate_memory_for_completed_tasks(&completed_tasks)
                 .map_err(|e| {
                     error!("Failed to deallocate memory for completed tasks: {}", e);
                     XpuOptimizerError::MemoryDeallocationError(format!("Failed to deallocate memory: {}", e))
                 })?;
+
+            // Store completed task IDs for later cleanup
+            let completed_task_ids: Vec<_> = completed_tasks.iter().map(|task| task.id).collect();
+            info!("Memory deallocated for tasks: {:?}", completed_task_ids);
         }
 
-        // Remove only completed tasks from scheduled_tasks and task_queue
-        for task in tasks_to_remove {
-            if let Some(_) = self.scheduled_tasks.remove(&task) {
-                info!("Removed task {} from scheduled tasks", task.id);
-                self.task_queue.retain(|t| t.id != task.id);
-                info!("Removed task {} from task queue", task.id);
-            } else {
-                warn!("Task {} was not found in scheduled tasks", task.id);
-            }
-        }
-
-        info!("Successfully completed and cleaned up {} tasks", completed_tasks.len());
-        info!("Remaining tasks in queue: {}", self.task_queue.len());
-        info!("Remaining scheduled tasks: {}", self.scheduled_tasks.len());
-        Ok(())
+        // Tasks will remain in queues until after memory verification
+        info!("Successfully completed {} tasks", completed_tasks.len());
+        info!("Tasks remaining in queue for verification: {}", self.task_queue.len());
+        info!("Scheduled tasks remaining for verification: {}", self.scheduled_tasks.len());
+        Ok(completed_tasks)
     }
 
     fn schedule_tasks(&mut self) -> Result<(), XpuOptimizerError> {
@@ -2105,5 +2102,23 @@ impl XpuOptimizer {
             return Err(XpuOptimizerError::AuthenticationError("JWT secret not set".to_string()));
         }
         Ok(self.jwt_secret.clone())
+    }
+
+    fn cleanup_completed_tasks(&mut self, completed_tasks: &[Task]) -> Result<(), XpuOptimizerError> {
+        info!("Starting final cleanup of completed tasks...");
+
+        for task in completed_tasks {
+            if let Some(_) = self.scheduled_tasks.remove(task) {
+                info!("Removed task {} from scheduled tasks", task.id);
+                self.task_queue.retain(|t| t.id != task.id);
+                info!("Removed task {} from task queue", task.id);
+            } else {
+                warn!("Task {} was not found in scheduled tasks during cleanup", task.id);
+            }
+        }
+
+        info!("Final cleanup completed. Remaining tasks in queue: {}", self.task_queue.len());
+        info!("Remaining scheduled tasks: {}", self.scheduled_tasks.len());
+        Ok(())
     }
 }
