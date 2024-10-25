@@ -1212,7 +1212,7 @@ impl XpuOptimizer {
 
                 // Update unit load in our tracking
                 if let Some(load_entry) = unit_loads.get_mut(unit_idx) {
-                    let (_, _, ref mut current_load) = load_entry;
+                    let (_, _, ref mut current_load): (usize, ProcessingUnitType, Duration) = *load_entry;
                     *current_load = current_load.saturating_add(task.execution_time);
                     info!("Updated Unit {} load: {:?}",
                         unit_idx, current_load);
