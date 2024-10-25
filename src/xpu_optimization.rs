@@ -1089,6 +1089,8 @@ impl XpuOptimizer {
 
     fn execute_tasks(&mut self) -> Result<(), XpuOptimizerError> {
         info!("Executing tasks on respective processing units...");
+        info!("Initial task queue size: {}", self.task_queue.len());
+        info!("Initial scheduled tasks size: {}", self.scheduled_tasks.len());
 
         let mut execution_results = Vec::new();
         let mut completed_tasks = Vec::new();
@@ -1147,14 +1149,21 @@ impl XpuOptimizer {
                 XpuOptimizerError::MemoryDeallocationError(format!("Failed to deallocate memory: {}", e))
             })?;
 
-        // Remove completed tasks from scheduled_tasks
+        // Clear both scheduled_tasks and task_queue for completed tasks
         for task in tasks_to_remove {
             if let None = self.scheduled_tasks.remove(&task) {
                 warn!("Task {} was already removed from scheduled tasks", task.id);
             }
+            self.task_queue.retain(|t| t.id != task.id);
         }
 
+        // Clear any remaining tasks in the queue that were scheduled
+        self.task_queue.clear();
+        self.scheduled_tasks.clear();
+
         info!("Successfully completed and cleaned up {} tasks", completed_tasks.len());
+        info!("Task queue cleared. Remaining tasks: {}", self.task_queue.len());
+        info!("Scheduled tasks cleared. Remaining tasks: {}", self.scheduled_tasks.len());
         Ok(())
     }
 
