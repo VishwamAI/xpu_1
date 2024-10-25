@@ -389,6 +389,14 @@ impl XpuOptimizer {
         ml_optimizer.set_policy(policy)?;
         Ok(())
     }
+
+    pub fn set_jwt_secret(&mut self, secret: Vec<u8>) -> Result<(), XpuOptimizerError> {
+        if secret.is_empty() {
+            return Err(XpuOptimizerError::ConfigError("JWT secret cannot be empty".to_string()));
+        }
+        self.jwt_secret = secret;
+        Ok(())
+    }
 }
 
 
@@ -710,27 +718,47 @@ impl XpuOptimizer {
         info!("Initializing XpuOptimizer with custom configuration");
         let mut processing_units: Vec<Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>> = Vec::new();
 
-        let unit_types = [
+        let required_unit_types = [
             ProcessingUnitType::CPU,
             ProcessingUnitType::GPU,
-            ProcessingUnitType::TPU,
             ProcessingUnitType::NPU,
+        ];
+
+        let additional_unit_types = [
+            ProcessingUnitType::TPU,
             ProcessingUnitType::LPU,
             ProcessingUnitType::VPU,
             ProcessingUnitType::FPGA,
         ];
 
         let default_processing_power = 1.0;
+        let mut unit_id = 0;
 
-        for (i, unit_type) in unit_types.iter().cycle().take(config.num_processing_units).enumerate() {
+        // First ensure we have at least one of each required unit type
+        for unit_type in required_unit_types.iter() {
             let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
-                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(i, default_processing_power))),
-                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(i, default_processing_power))),
-                ProcessingUnitType::TPU => Arc::new(Mutex::new(TPU::new(i, default_processing_power))),
-                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(i, default_processing_power))),
-                ProcessingUnitType::LPU => Arc::new(Mutex::new(LPU::new(i, default_processing_power))),
-                ProcessingUnitType::VPU => Arc::new(Mutex::new(VPU::new(i, default_processing_power))),
-                ProcessingUnitType::FPGA => Arc::new(Mutex::new(FPGACore::new(i, default_processing_power))),
+                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id, default_processing_power))),
+                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id, default_processing_power))),
+                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id, default_processing_power))),
+                _ => unreachable!(),
+            };
+            processing_units.push(unit);
+            unit_id += 1;
+        }
+
+        // Then add remaining units up to the configured amount
+        let remaining_units = config.num_processing_units.saturating_sub(required_unit_types.len());
+        let all_types = [required_unit_types.as_slice(), additional_unit_types.as_slice()].concat();
+
+        for (i, unit_type) in all_types.iter().cycle().take(remaining_units).enumerate() {
+            let unit: Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>> = match unit_type {
+                ProcessingUnitType::CPU => Arc::new(Mutex::new(CPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::GPU => Arc::new(Mutex::new(GPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::TPU => Arc::new(Mutex::new(TPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::NPU => Arc::new(Mutex::new(NPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::LPU => Arc::new(Mutex::new(LPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::VPU => Arc::new(Mutex::new(VPU::new(unit_id + i, default_processing_power))),
+                ProcessingUnitType::FPGA => Arc::new(Mutex::new(FPGACore::new(unit_id + i, default_processing_power))),
             };
             processing_units.push(unit);
         }
@@ -1396,7 +1424,7 @@ impl XpuOptimizer {
         }
     }
 
-    fn add_user(
+    pub fn add_user(
         &mut self,
         username: String,
         password: String,
@@ -1428,7 +1456,7 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn remove_user(&mut self, username: &str) -> Result<(), XpuOptimizerError> {
+    pub fn remove_user(&mut self, username: &str) -> Result<(), XpuOptimizerError> {
         if self.users.remove(username).is_none() {
             return Err(XpuOptimizerError::UserNotFoundError(username.to_string()));
         }
@@ -1438,7 +1466,7 @@ impl XpuOptimizer {
         Ok(())
     }
 
-    fn authenticate_user(
+    pub fn authenticate_user(
         &mut self,
         username: &str,
         password: &str,
@@ -1488,7 +1516,7 @@ impl XpuOptimizer {
         .map_err(|e| XpuOptimizerError::TokenGenerationError(e.to_string()))
     }
 
-    fn check_user_permission(
+    pub fn check_user_permission(
         &self,
         role: &UserRole,
         required_permission: Permission,
@@ -1503,7 +1531,7 @@ impl XpuOptimizer {
         })
     }
 
-    fn validate_jwt_token(&self, token: &str) -> Result<String, XpuOptimizerError> {
+    pub fn validate_jwt_token(&self, token: &str) -> Result<String, XpuOptimizerError> {
         let decoding_key = DecodingKey::from_secret(self.jwt_secret.as_ref());
         let validation = Validation::new(Algorithm::HS256);
         let token_data = decode::<Claims>(token, &decoding_key, &validation)
@@ -1511,7 +1539,7 @@ impl XpuOptimizer {
         Ok(token_data.claims.sub)
     }
 
-    fn get_user_from_token(&self, token: &str) -> Result<User, XpuOptimizerError> {
+    pub fn get_user_from_token(&self, token: &str) -> Result<User, XpuOptimizerError> {
         let username = self.validate_jwt_token(token)?;
         self.users
             .get(&username)

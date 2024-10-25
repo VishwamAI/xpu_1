@@ -1,19 +1,25 @@
-use xpu_manager_rust::xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, UserRole, Permission};
+use xpu_manager_rust::{
+    xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, UserRole, Permission},
+    XpuOptimizerError,
+};
 use std::sync::Once;
 
 static INIT: Once = Once::new();
 
 /// Initialize test environment
-pub fn initialize_test_env(optimizer: &mut XpuOptimizer) {
+pub fn initialize_test_env(optimizer: &mut XpuOptimizer) -> Result<(), XpuOptimizerError> {
     INIT.call_once(|| {
         // Set up any global test configuration here
-        optimizer.set_jwt_secret(b"test_secret_key_for_development_only".to_vec());
+        if let Err(e) = optimizer.set_jwt_secret(b"test_secret_key_for_development_only".to_vec()) {
+            eprintln!("Failed to set JWT secret: {}", e);
+        }
     });
+    Ok(())
 }
 
 /// Set up a test user with specified role
-pub fn setup_test_user_with_role(optimizer: &mut XpuOptimizer, role: UserRole) -> String {
-    initialize_test_env(optimizer);
+pub fn setup_test_user_with_role(optimizer: &mut XpuOptimizer, role: UserRole) -> Result<String, XpuOptimizerError> {
+    initialize_test_env(optimizer)?;
 
     let username = match role {
         UserRole::Admin => "test_admin",
@@ -26,25 +32,25 @@ pub fn setup_test_user_with_role(optimizer: &mut XpuOptimizer, role: UserRole) -
         username.to_string(),
         "test_password".to_string(),
         role,
-    ).expect(&format!("Failed to add {} user", username));
+    ).map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to add {} user: {}", username, e)))?;
 
     // Authenticate and get a valid token
     optimizer.authenticate_user(username, "test_password")
-        .expect(&format!("Failed to authenticate {} user", username))
+        .map_err(|e| XpuOptimizerError::AuthenticationError(format!("Failed to authenticate {} user: {}", username, e)))
 }
 
 /// Set up a test user with User role (backward compatibility)
-pub fn setup_test_user(optimizer: &mut XpuOptimizer) -> String {
+pub fn setup_test_user(optimizer: &mut XpuOptimizer) -> Result<String, XpuOptimizerError> {
     setup_test_user_with_role(optimizer, UserRole::User)
 }
 
 /// Set up an admin user for tests requiring elevated permissions
-pub fn setup_admin_user(optimizer: &mut XpuOptimizer) -> String {
+pub fn setup_admin_user(optimizer: &mut XpuOptimizer) -> Result<String, XpuOptimizerError> {
     setup_test_user_with_role(optimizer, UserRole::Admin)
 }
 
 /// Set up a manager user for tests requiring management permissions
-pub fn setup_manager_user(optimizer: &mut XpuOptimizer) -> String {
+pub fn setup_manager_user(optimizer: &mut XpuOptimizer) -> Result<String, XpuOptimizerError> {
     setup_test_user_with_role(optimizer, UserRole::Manager)
 }
 
@@ -62,8 +68,8 @@ pub fn validate_token_with_permission(
 }
 
 /// Create a test session with specified role
-pub fn create_test_session(optimizer: &mut XpuOptimizer, role: UserRole) -> String {
-    initialize_test_env(optimizer);
+pub fn create_test_session(optimizer: &mut XpuOptimizer, role: UserRole) -> Result<String, XpuOptimizerError> {
+    initialize_test_env(optimizer)?;
 
     let username = match role {
         UserRole::Admin => "session_admin",
@@ -76,27 +82,30 @@ pub fn create_test_session(optimizer: &mut XpuOptimizer, role: UserRole) -> Stri
         username.to_string(),
         "session_password".to_string(),
         role,
-    ).expect("Failed to add session user");
+    ).map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to add session user: {}", e)))?;
 
     optimizer.authenticate_user(username, "session_password")
-        .expect("Failed to authenticate session user")
+        .map_err(|e| XpuOptimizerError::AuthenticationError(format!("Failed to authenticate session user: {}", e)))
 }
 
 /// Clean up test users and sessions
-pub fn cleanup_test_data(optimizer: &mut XpuOptimizer) {
+pub fn cleanup_test_data(optimizer: &mut XpuOptimizer) -> Result<(), XpuOptimizerError> {
     let test_users = vec![
         "test_admin", "test_manager", "test_user",
         "session_admin", "session_manager", "session_user"
     ];
 
     for username in test_users {
-        let _ = optimizer.remove_user(username);
+        if let Err(e) = optimizer.remove_user(username) {
+            eprintln!("Warning: Failed to remove user {}: {}", username, e);
+        }
     }
+    Ok(())
 }
 
 /// Get a valid token for integration tests
-pub fn get_integration_test_token(optimizer: &mut XpuOptimizer) -> String {
-    initialize_test_env(optimizer);
+pub fn get_integration_test_token(optimizer: &mut XpuOptimizer) -> Result<String, XpuOptimizerError> {
+    initialize_test_env(optimizer)?;
     setup_test_user_with_role(optimizer, UserRole::Admin)
 }
 
@@ -105,24 +114,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_user_roles_and_permissions() {
-        let mut optimizer = XpuOptimizer::new(XpuOptimizerConfig::default());
-        initialize_test_env(&mut optimizer);
+    fn test_user_roles_and_permissions() -> Result<(), XpuOptimizerError> {
+        let mut optimizer = XpuOptimizer::new(XpuOptimizerConfig::default())
+            .map_err(|e| XpuOptimizerError::ConfigError(format!("Failed to create optimizer: {}", e)))?;
+        initialize_test_env(&mut optimizer)?;
 
         // Test admin user
-        let admin_token = setup_admin_user(&mut optimizer);
+        let admin_token = setup_admin_user(&mut optimizer)?;
         assert!(validate_token_with_permission(&optimizer, &admin_token, Permission::ManageUsers));
 
         // Test manager user
-        let manager_token = setup_manager_user(&mut optimizer);
+        let manager_token = setup_manager_user(&mut optimizer)?;
         assert!(validate_token_with_permission(&optimizer, &manager_token, Permission::AddTask));
         assert!(!validate_token_with_permission(&optimizer, &manager_token, Permission::ManageUsers));
 
         // Test regular user
-        let user_token = setup_test_user(&mut optimizer);
+        let user_token = setup_test_user(&mut optimizer)?;
         assert!(validate_token_with_permission(&optimizer, &user_token, Permission::ViewTasks));
         assert!(!validate_token_with_permission(&optimizer, &user_token, Permission::AddSecureTask));
 
-        cleanup_test_data(&mut optimizer);
+        cleanup_test_data(&mut optimizer)?;
+        Ok(())
     }
 }

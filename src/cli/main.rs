@@ -147,8 +147,9 @@ pub fn parse_config_file(config_file: &str) -> Result<XpuOptimizerConfig, XpuOpt
 
     let adaptive_optimization_policy = match config["adaptive_optimization_policy"].as_str() {
         Some("default") => "default".to_string(),
-        Some("ml-driven") => "ml-driven".to_string(),
-        Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid adaptive_optimization_policy: {}", s))),
+        Some("aggressive") => "aggressive".to_string(),
+        Some("conservative") => "conservative".to_string(),
+        Some(s) => return Err(XpuOptimizerError::ConfigError(format!("Invalid adaptive_optimization_policy: {}. Valid values are: default, aggressive, conservative", s))),
         None => "default".to_string(),
     };
 
