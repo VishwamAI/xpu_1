@@ -24,14 +24,19 @@ impl std::fmt::Debug for dyn MLModel + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SimpleRegressionModel {
     coefficients: Vec<f64>,
+    mean_values: Vec<f64>,
+    std_values: Vec<f64>,
     policy: String,
 }
 
 impl SimpleRegressionModel {
     pub fn new() -> Self {
         SimpleRegressionModel {
-            coefficients: vec![0.0; 4], // Assuming 4 features: execution_time, memory_usage, processing_unit_type, priority
+            // Initialize with reasonable defaults based on typical task characteristics
+            coefficients: vec![0.1, 0.001, 0.05, 0.02], // [execution_time_factor, memory_factor, unit_type_factor, priority_factor]
             policy: "default".to_string(),
+            mean_values: vec![0.0; 4], // Initialize means for feature normalization
+            std_values: vec![1.0; 4], // Initialize standard deviations
         }
     }
 
@@ -60,39 +65,85 @@ impl MLModel for SimpleRegressionModel {
             return Err(XpuOptimizerError::MLOptimizationError("No historical data provided for training".to_string()));
         }
 
+        // Calculate mean values for feature normalization
+        let mut mean_execution_time = 0.0;
+        let mut mean_memory_usage = 0.0;
+        let mut mean_priority = 0.0;
+
+        for data in historical_data {
+            mean_execution_time += data.execution_time.as_secs_f64();
+            mean_memory_usage += data.memory_usage as f64;
+            mean_priority += data.priority as f64;
+        }
+
+        let n = historical_data.len() as f64;
+        mean_execution_time /= n;
+        mean_memory_usage /= n;
+        mean_priority /= n;
+
+        self.mean_values = vec![mean_execution_time, mean_memory_usage, mean_priority];
+
+        // Normalize features
         let x: Vec<Vec<f64>> = historical_data
             .iter()
             .map(|data| {
                 vec![
-                    data.execution_time.as_secs_f64(),
-                    data.memory_usage as f64,
+                    (data.execution_time.as_secs_f64() - mean_execution_time) / mean_execution_time.max(1.0),
+                    (data.memory_usage as f64 - mean_memory_usage) / mean_memory_usage.max(1.0),
                     self.normalize_processing_unit(&data.unit_type),
-                    data.priority as f64,
+                    (data.priority as f64 - mean_priority) / mean_priority.max(1.0),
                 ]
             })
             .collect();
 
         let y: Vec<f64> = historical_data
             .iter()
-            .map(|data| data.execution_time.as_secs_f64())
+            .map(|data| data.execution_time.as_secs_f64() / mean_execution_time.max(1.0))
             .collect();
 
-        // Simple gradient descent
-        let learning_rate = 0.01;
+        // Validate features
+        if x.iter().any(|features| features.iter().any(|&f| f.is_nan() || f.is_infinite())) {
+            return Err(XpuOptimizerError::MLOptimizationError("Invalid feature values after normalization".to_string()));
+        }
+
+        // Adaptive gradient descent
+        let mut learning_rate = 0.01;
         let iterations = 1000;
         let m = x.len() as f64;
+        let mut prev_error = f64::MAX;
 
-        for _ in 0..iterations {
+        for iter in 0..iterations {
             let mut gradient = vec![0.0; self.coefficients.len()];
+            let mut total_error = 0.0;
+
             for (xi, &yi) in x.iter().zip(&y) {
                 let h: f64 = xi.iter().zip(&self.coefficients).map(|(xi, ci)| xi * ci).sum();
                 let error = h - yi;
+                total_error += error * error;
+
                 for (j, &xij) in xi.iter().enumerate() {
                     gradient[j] += error * xij / m;
                 }
             }
+
+            // Adjust learning rate if error is increasing
+            if total_error > prev_error {
+                learning_rate *= 0.5;
+            }
+            prev_error = total_error;
+
+            // Update coefficients with validation
             for (coeff, grad) in self.coefficients.iter_mut().zip(gradient.iter()) {
-                *coeff -= learning_rate * grad;
+                let new_coeff = *coeff - learning_rate * grad;
+                if new_coeff.is_finite() {
+                    *coeff = new_coeff;
+                }
+            }
+
+            // Early stopping if converged
+            if total_error < 1e-6 || learning_rate < 1e-10 {
+                log::info!("Training converged after {} iterations", iter);
+                break;
             }
         }
 
@@ -100,12 +151,35 @@ impl MLModel for SimpleRegressionModel {
     }
 
     fn predict(&self, task_data: &HistoricalTaskData) -> Result<TaskPrediction, XpuOptimizerError> {
-        let features = [
+        // Check if model has valid coefficients (not all zeros)
+        if self.coefficients.iter().all(|&x| x == 0.0) {
+            return Err(XpuOptimizerError::MLOptimizationError(
+                "Model not trained: coefficients are all zero".to_string()
+            ));
+        }
+
+        let raw_features = [
             task_data.execution_time.as_secs_f64(),
             task_data.memory_usage as f64,
             self.normalize_processing_unit(&task_data.unit_type),
             task_data.priority as f64,
         ];
+
+        // Validate input features
+        if raw_features.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err(XpuOptimizerError::MLOptimizationError("Invalid input features".to_string()));
+        }
+
+        // Normalize features using mean values
+        let features: Vec<f64> = raw_features.iter()
+            .zip(self.mean_values.iter())
+            .map(|(&feat, &mean)| if mean != 0.0 { feat / mean } else { feat })
+            .collect();
+
+        // Additional validation after normalization
+        if features.iter().any(|&x| x.is_nan() || x.is_infinite() || x.abs() > 1000.0) {
+            return Err(XpuOptimizerError::MLOptimizationError("Feature normalization produced invalid values".to_string()));
+        }
 
         let prediction: f64 = self
             .coefficients
@@ -118,10 +192,15 @@ impl MLModel for SimpleRegressionModel {
             return Err(XpuOptimizerError::MLOptimizationError("Invalid prediction value".to_string()));
         }
 
+        // Ensure prediction is reasonable (within expected bounds)
+        let max_duration = 3600.0; // 1 hour maximum prediction
+        let min_duration = 0.1; // 100ms minimum prediction
+        let clamped_prediction = prediction.max(min_duration).min(max_duration);
+
         Ok(TaskPrediction {
             task_id: task_data.task_id,
-            estimated_duration: Duration::from_secs_f64(prediction.max(0.0)),
-            estimated_resource_usage: (prediction.max(0.0) * 100.0) as usize, // Dummy resource usage calculation
+            estimated_duration: Duration::from_secs_f64(clamped_prediction),
+            estimated_resource_usage: (clamped_prediction * 100.0 / max_duration) as usize,
             recommended_processing_unit: task_data.unit_type.clone(),
         })
     }
@@ -172,7 +251,7 @@ impl MachineLearningOptimizer for DefaultMLOptimizer {
     fn optimize(
         &self,
         historical_data: &[TaskExecutionData],
-        processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
+        _processing_units: &[Arc<Mutex<dyn ProcessingUnitTrait + Send + Sync>>],
     ) -> Result<Scheduler, XpuOptimizerError> {
         let mut model = self.ml_model.lock()
             .map_err(|e| XpuOptimizerError::LockError(format!("Failed to lock ML model: {}", e)))?;

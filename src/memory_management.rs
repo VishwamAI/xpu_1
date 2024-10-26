@@ -26,7 +26,8 @@ pub enum MemoryManagerType {
 }
 
 pub struct SimpleMemoryManager {
-    memory_pool: BTreeMap<usize, Vec<usize>>,
+    memory_pool: BTreeMap<usize, Vec<usize>>,  // Maps block size to list of block addresses
+    allocated_blocks: BTreeMap<usize, usize>,   // Maps block address to block size
     total_memory: usize,
     allocated_memory: usize,
     fragmentation_threshold: f32,
@@ -36,6 +37,7 @@ impl SimpleMemoryManager {
     pub fn new(total_memory: usize) -> Self {
         SimpleMemoryManager {
             memory_pool: BTreeMap::new(),
+            allocated_blocks: BTreeMap::new(),
             total_memory,
             allocated_memory: 0,
             fragmentation_threshold: 0.2, // 20% fragmentation threshold
@@ -72,27 +74,49 @@ impl MemoryManager for SimpleMemoryManager {
             return Err(MemoryError::InsufficientMemory);
         }
 
-        let mut allocated = false;
+        let mut _allocated = false;
+        let mut block_to_remove = None;
+        let mut block_addr_to_use = None;
+        let mut original_block_size = 0;
+
+        // First try to find an existing free block of suitable size
         for (block_size, blocks) in self.memory_pool.range_mut(size..) {
-            if let Some(block) = blocks.pop() {
-                self.allocated_memory += size;
-                if *block_size > size {
-                    let remaining = *block_size - size;
-                    self.memory_pool
-                        .entry(remaining)
-                        .or_default()
-                        .push(block + size);
+            if let Some(block_addr) = blocks.last() {
+                block_addr_to_use = Some(*block_addr);
+                original_block_size = *block_size;
+                if blocks.len() == 1 {
+                    block_to_remove = Some(*block_size);
                 }
-                allocated = true;
+                _allocated = true;
                 break;
             }
         }
 
-        if !allocated {
-            self.memory_pool
-                .entry(size)
-                .or_default()
-                .push(self.allocated_memory);
+        if let Some(block_addr) = block_addr_to_use {
+            // Remove the block from the pool
+            if let Some(size_to_remove) = block_to_remove {
+                self.memory_pool.remove(&size_to_remove);
+            } else if let Some(blocks) = self.memory_pool.get_mut(&original_block_size) {
+                blocks.pop();
+            }
+
+            // Record the allocation
+            self.allocated_blocks.insert(block_addr, size);
+            self.allocated_memory += size;
+
+            // If the block is larger than needed, create a new free block
+            if original_block_size > size {
+                let remaining = original_block_size - size;
+                let remaining_addr = block_addr + size;
+                self.memory_pool
+                    .entry(remaining)
+                    .or_default()
+                    .push(remaining_addr);
+            }
+        } else {
+            // If no suitable block found, allocate from free memory
+            let block_addr = self.allocated_memory;
+            self.allocated_blocks.insert(block_addr, size);
             self.allocated_memory += size;
         }
 
@@ -104,15 +128,31 @@ impl MemoryManager for SimpleMemoryManager {
     }
 
     fn deallocate(&mut self, size: usize) -> Result<(), MemoryError> {
-        if let Some(blocks) = self.memory_pool.get_mut(&size) {
-            if blocks.pop().is_some() {
-                self.allocated_memory = self.allocated_memory.saturating_sub(size);
-                Ok(())
-            } else {
-                Err(MemoryError::BlockNotFound)
+        // Find the block address for this size
+        if let Some((&block_addr, &_block_size)) = self.allocated_blocks
+            .iter()
+            .find(|(_, &s)| s == size)
+        {
+            // Remove from allocated blocks
+            self.allocated_blocks.remove(&block_addr);
+
+            // Add back to memory pool
+            self.memory_pool
+                .entry(size)
+                .or_default()
+                .push(block_addr);
+
+            // Update allocated memory
+            self.allocated_memory = self.allocated_memory.saturating_sub(size);
+
+            // Attempt to merge adjacent free blocks if possible
+            if self.fragmentation_level() > self.fragmentation_threshold {
+                self.defragment();
             }
+
+            Ok(())
         } else {
-            Err(MemoryError::SizeNotFound)
+            Err(MemoryError::BlockNotFound)
         }
     }
 
@@ -182,7 +222,7 @@ impl MemoryManager for DynamicMemoryManager {
         let total_size = blocks_needed * self.block_size;
 
         if let Some(addresses) = self.memory_pool.get_mut(&total_size) {
-            if let Some(_) = addresses.pop() {
+            if let Some(_freed_address) = addresses.pop() {
                 self.allocated_memory -= total_size;
                 Ok(())
             } else {
@@ -218,8 +258,6 @@ impl MemoryManager for DynamicMemoryManager {
         Ok(())
     }
 }
-
-// Remove duplicate implementation
 
 pub enum MemoryStrategy {
     Simple(SimpleMemoryManager),

@@ -5,9 +5,10 @@ use xpu_manager_rust::{
     power_management::{PowerManager, PowerState, PowerManagementPolicy},
     task_scheduling::{ProcessingUnitType, Task, Scheduler, SchedulerType},
     XpuOptimizerError,
-    xpu_optimization::{XpuOptimizer, XpuOptimizerConfig},
+    xpu_optimization::{XpuOptimizer, XpuOptimizerConfig, UserRole},
     cloud_offloading::CloudOffloadingPolicy,
 };
+mod test_helpers;
 
 #[test]
 fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError> {
@@ -21,6 +22,9 @@ fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError>
         adaptive_optimization_policy: "default".to_string(),
     };
     let mut optimizer = XpuOptimizer::new(config)?;
+
+    // Initialize test environment and get admin token for task operations
+    let admin_token = test_helpers::create_test_session(&mut optimizer, UserRole::Admin)?;
 
     let tasks = vec![
         Task::new(
@@ -44,7 +48,7 @@ fn test_task_scheduling_and_memory_allocation() -> Result<(), XpuOptimizerError>
     ];
 
     for task in &tasks {
-        optimizer.add_task(task.clone(), "dummy_token")?;
+        optimizer.add_task(task.clone(), &admin_token)?;
     }
 
     assert_eq!(optimizer.task_queue.len(), 2);
@@ -93,6 +97,9 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
     };
     let mut optimizer = XpuOptimizer::new(config)?;
 
+    // Initialize test environment and get admin token for task operations
+    let admin_token = test_helpers::create_test_session(&mut optimizer, UserRole::Admin)?;
+
     let tasks = vec![
         Task::new(
             1,
@@ -124,7 +131,7 @@ fn test_integrated_system() -> Result<(), XpuOptimizerError> {
     ];
 
     for task in tasks {
-        optimizer.add_task(task, "dummy_token")?;
+        optimizer.add_task(task, &admin_token)?;
     }
 
     let memory_manager = optimizer.memory_manager.lock().map_err(|_| XpuOptimizerError::LockError("Failed to lock memory manager".to_string()))?;

@@ -62,7 +62,7 @@ impl ProcessingUnitTrait for GPU {
 
     fn can_handle_task(&self, task: &Task) -> Result<bool, XpuOptimizerError> {
         Ok(task.unit_type == ProcessingUnitType::GPU &&
-           self.processing_unit.current_load + task.execution_time <= Duration::from_secs_f64(self.processing_unit.processing_power))
+           self.processing_unit.current_load.saturating_add(task.execution_time) <= Duration::from_secs_f64(self.processing_unit.processing_power))
     }
 
     fn assign_task(&mut self, task: &Task) -> Result<(), XpuOptimizerError> {
@@ -71,7 +71,7 @@ impl ProcessingUnitTrait for GPU {
             Ok(())
         } else {
             Err(XpuOptimizerError::ResourceAllocationError(
-                format!("GPU cannot handle task {}", task.id)
+                format!("GPU unit {} cannot handle task {} due to insufficient capacity or type mismatch", self.get_id(), task.id)
             ))
         }
     }
@@ -91,9 +91,10 @@ impl ProcessingUnitTrait for GPU {
     }
 
     fn execute_task(&mut self, task: &Task) -> Result<Duration, XpuOptimizerError> {
+        let processing_time = task.execution_time;
         self.assign_task(task)?;
-        log::info!("GPU task {} executed in {:?}", task.id, task.execution_time);
-        Ok(task.execution_time)
+        log::info!("GPU processed task {} in {:?}", task.id, processing_time);
+        Ok(processing_time)
     }
 
     fn set_energy_profile(&mut self, profile: EnergyProfile) -> Result<(), PowerManagementError> {

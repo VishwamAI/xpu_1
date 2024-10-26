@@ -2,6 +2,7 @@ pub mod adaptive_optimization;
 pub mod cloud_offloading;
 pub mod cluster_management;
 pub mod distributed_memory;
+pub mod historical_data;
 pub mod memory_management;
 pub mod ml_models;
 pub mod power_management;
@@ -24,6 +25,7 @@ pub use adaptive_optimization::AdaptiveOptimizer;
 pub use cloud_offloading::{CloudOffloader, CloudOffloadingPolicy};
 pub use cluster_management::{ClusterManager, ClusterNode, LoadBalancer, NodeStatus};
 pub use distributed_memory::DistributedMemoryManager;
+pub use historical_data::get_test_historical_data;
 pub use memory_management::{MemoryManager, MemoryStrategy, MemoryManagerType};
 pub use ml_models::MLModel;
 pub use power_management::{EnergyProfile, PowerManager, PowerState, PowerPolicy, PowerManagementPolicy};
@@ -55,6 +57,8 @@ pub enum XpuOptimizerError {
     SchedulingError(String),
     #[error("Memory error: {0}")]
     MemoryError(String),
+    #[error("Memory deallocation error: {0}")]
+    MemoryDeallocationError(String),
     #[error("Cluster initialization error: {0}")]
     ClusterInitializationError(String),
     #[error("Task execution error: {0}")]
@@ -109,4 +113,6 @@ pub enum XpuOptimizerError {
     DivisionByZeroError(String),
     #[error("Initialization error: {0}")]
     InitializationError(String),
+    #[error("System error: {0}")]
+    SystemError(String),
 }
